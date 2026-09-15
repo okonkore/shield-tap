@@ -1,0 +1,479 @@
+extends Node2D
+
+const W := 432.0
+const H := 768.0
+const ART = preload("res://assets/shield-tap-golem-diagonal-keyart-v3.png")
+const HOME_ART = preload("res://assets/shield-tap-home-interior-v1.png")
+const JP_FONT = preload("res://assets/fonts/NotoSansJP-VF.ttf")
+const CX := 216.0
+const HY := 300.0
+const FOCAL := 250.0
+const SHIELD := Vector2(125, 568)
+const ROCK_START_HEIGHT := 3.95
+const ROCK_END_HEIGHT := -1.05
+const ROCK_GRAVITY := 8.0
+
+enum Mode { TITLE, HOME, BATTLE, RECALL, DOWNED }
+const SAVE_KEY := "shield-tap-save-v1"
+var mode := Mode.TITLE
+var has_save := false
+var needs_rest := false
+
+# Persistent progression. Values are deliberately simple for the first playable slice.
+var arm_level := 1
+var level_xp := 0.0
+var pending_xp := 0.0
+var ore := 0
+var base_cap := 100.0
+var cap_resist := 0
+var lightness := 0
+var efficiency := 0
+
+# Expedition state. Boss health is reset on every departure.
+var cap := 100.0
+var stamina := 100.0
+var boss_hp := 360.0
+var boss_hp_max := 360.0
+var princess_hp := 5
+var blocks := 0
+var run_ore := 0
+var run_xp := 0.0
+var recall_ready := false
+var recall_time := 0.0
+var exhausted_time := 0.0
+var raising_time := 0.0
+var held := false
+var guarding := false
+var attack_active := false
+var attack_t := 0.0
+var attack_duration := 1.2
+var attack_kind := "stone"
+var attack_wait := 1.0
+var attack_index := 0
+var flash := 0.0
+var message := "出撃してゴーレムに挑もう"
+
+const PATTERN := [
+	{"kind": "stone", "wait": 0.70}, {"kind": "stone", "wait": 0.55},
+	{"kind": "volley", "wait": 0.35}, {"kind": "volley", "wait": 0.35},
+	{"kind": "heavy", "wait": 1.05}, {"kind": "stone", "wait": 0.65},
+	{"kind": "volley", "wait": 0.35}, {"kind": "heavy", "wait": 1.10},
+]
+
+var audio_player: AudioStreamPlayer
+var audio_playback: AudioStreamGeneratorPlayback
+var tone_frames := 0
+var tone_total := 0
+var tone_phase := 0.0
+var tone_frequency := 120.0
+var tone_noise := 0.0
+var tone_drop := 0.0
+
+func _ready() -> void:
+	_setup_audio()
+	has_save = _load_save()
+	queue_redraw()
+
+func _setup_audio() -> void:
+	audio_player = AudioStreamPlayer.new()
+	var stream := AudioStreamGenerator.new()
+	stream.mix_rate = 44100.0
+	stream.buffer_length = 0.35
+	audio_player.stream = stream
+	add_child(audio_player)
+	audio_player.play()
+	audio_playback = audio_player.get_stream_playback()
+
+func _process(delta: float) -> void:
+	_fill_audio()
+	flash = maxf(0.0, flash - delta)
+	if mode in [Mode.BATTLE, Mode.RECALL, Mode.DOWNED]:
+		_process_expedition(delta)
+	queue_redraw()
+
+func _load_save() -> bool:
+	if not OS.has_feature("web"):
+		return false
+	var raw = JavaScriptBridge.eval("localStorage.getItem('%s')" % SAVE_KEY, true)
+	if not raw is String or raw.is_empty():
+		return false
+	var json := JSON.new()
+	if json.parse(raw) != OK or not json.data is Dictionary:
+		return false
+	var data: Dictionary = json.data
+	arm_level = int(data.get("arm_level", 1))
+	level_xp = float(data.get("level_xp", 0.0))
+	pending_xp = float(data.get("pending_xp", 0.0))
+	ore = int(data.get("ore", 0))
+	base_cap = float(data.get("base_cap", 100.0))
+	cap_resist = int(data.get("cap_resist", 0))
+	lightness = int(data.get("lightness", 0))
+	efficiency = int(data.get("efficiency", 0))
+	needs_rest = bool(data.get("needs_rest", false))
+	message = "セーブデータを読み込んだ"
+	return true
+
+func _save_progress() -> void:
+	has_save = true
+	if not OS.has_feature("web"):
+		return
+	var data := {
+		"arm_level": arm_level, "level_xp": level_xp, "pending_xp": pending_xp,
+		"ore": ore, "base_cap": base_cap, "cap_resist": cap_resist,
+		"lightness": lightness, "efficiency": efficiency, "needs_rest": needs_rest,
+	}
+	var payload := JSON.stringify(data)
+	JavaScriptBridge.eval("localStorage.setItem('%s', %s)" % [SAVE_KEY, JSON.stringify(payload)], true)
+
+func _new_game() -> void:
+	arm_level = 1
+	level_xp = 0.0
+	pending_xp = 0.0
+	ore = 0
+	base_cap = 100.0
+	cap_resist = 0
+	lightness = 0
+	efficiency = 0
+	needs_rest = false
+	message = "出撃してゴーレムに挑もう"
+	_save_progress()
+	mode = Mode.HOME
+
+func _process_expedition(delta: float) -> void:
+	# The princess damages the boss continuously. A successful full fight takes about 100 seconds.
+	boss_hp = maxf(0.0, boss_hp - (3.45 + arm_level * 0.22) * delta)
+	if boss_hp <= 0.0:
+		_finish(true, "ゴーレムを鎮めた")
+		return
+
+	if mode == Mode.RECALL:
+		recall_time -= delta
+		message = "帰還魔法の詠唱中  %.1f" % maxf(0.0, recall_time)
+		_update_guard(delta)
+		if recall_time <= 0.0:
+			_finish(true, "帰還魔法が完成した")
+			return
+	elif mode == Mode.DOWNED:
+		guarding = false
+		held = false
+	elif exhausted_time > 0.0:
+		exhausted_time -= delta
+		guarding = false
+		message = "息切れ中 — 盾を上げられない"
+		if exhausted_time <= 0.0:
+			stamina = maxf(stamina, cap * 0.52)
+			message = "盾を構えられる"
+	else:
+		_update_guard(delta)
+	_process_attack(delta)
+
+func _update_guard(delta: float) -> void:
+	if held and not guarding:
+		raising_time -= delta
+		if raising_time <= 0.0:
+			guarding = true
+	elif not held:
+		guarding = false
+	if guarding:
+		stamina = maxf(0.0, stamina - 17.0 * (1.0 - efficiency * 0.09) * delta)
+		if stamina <= 0.0:
+			guarding = false
+			held = false
+			exhausted_time = 2.0
+	else:
+		stamina = minf(cap, stamina + 24.0 * delta)
+
+func _process_attack(delta: float) -> void:
+	if attack_active:
+		attack_t += delta / attack_duration
+		if attack_t >= 1.0:
+			_resolve_attack()
+	else:
+		attack_wait -= delta
+		if attack_wait <= 0.0:
+			_start_attack()
+
+func _start_attack() -> void:
+	var entry: Dictionary = PATTERN[attack_index]
+	attack_index = (attack_index + 1) % PATTERN.size()
+	attack_kind = str(entry["kind"])
+	attack_duration = 1.15 if attack_kind == "stone" else (0.82 if attack_kind == "volley" else 1.45)
+	attack_t = 0.0
+	attack_active = true
+
+func _resolve_attack() -> void:
+	attack_active = false
+	var last: Dictionary = PATTERN[(attack_index - 1 + PATTERN.size()) % PATTERN.size()]
+	attack_wait = float(last["wait"])
+	if mode != Mode.DOWNED and guarding:
+		_block()
+	else:
+		_damage_princess(2 if attack_kind == "heavy" else 1)
+
+func _block() -> void:
+	var base_cost := 9.0 if attack_kind == "stone" else (6.0 if attack_kind == "volley" else 23.0)
+	var cap_cost := base_cost * (1.0 - cap_resist * 0.10)
+	stamina = maxf(0.0, stamina - cap_cost * 0.72)
+	cap = maxf(0.0, cap - cap_cost)
+	run_xp += cap_cost
+	blocks += 1
+	if blocks % 2 == 0:
+		run_ore += 1
+	if blocks >= 4:
+		recall_ready = true
+	flash = 0.18
+	# A bright, short shield clang contrasts with the dull damage sound.
+	_play_sound(165.0 if attack_kind == "heavy" else 235.0, 0.14, 0.13, -0.12)
+	message = "防御 %d回   鍛錬 +%d" % [blocks, int(run_xp)]
+	if cap <= 0.0:
+		mode = Mode.DOWNED
+		message = "腕が限界だ — 王女が一人で戦う"
+	elif stamina <= 0.0:
+		guarding = false
+		held = false
+		exhausted_time = 2.0
+
+func _damage_princess(damage: int) -> void:
+	princess_hp = max(0, princess_hp - damage)
+	flash = 0.24
+	# A descending noisy thud makes an unblocked hit immediately recognizable.
+	_play_sound(160.0, 0.34, 0.42, -0.62)
+	if princess_hp <= 0:
+		_finish(false, "王女が倒れた")
+	else:
+		message = "王女が被弾 — 盾で守れ"
+
+func _start_expedition() -> void:
+	if needs_rest:
+		message = "遠征から帰った。まず眠って休もう"
+		return
+	mode = Mode.BATTLE
+	boss_hp = boss_hp_max
+	princess_hp = 5
+	cap = base_cap
+	stamina = cap
+	blocks = 0
+	run_ore = 0
+	run_xp = 0.0
+	recall_ready = false
+	recall_time = 0.0
+	exhausted_time = 0.0
+	attack_active = false
+	attack_wait = 1.0
+	attack_index = 0
+	message = "画面を長押しして盾を構える"
+
+func _start_recall() -> void:
+	if recall_ready and mode == Mode.BATTLE:
+		mode = Mode.RECALL
+		recall_time = 2.6
+		message = "帰還魔法を守れ"
+
+func _finish(success: bool, result: String) -> void:
+	if success:
+		ore += run_ore
+		pending_xp += run_xp
+		message = "%s　鉱石 +%d　経験値 +%d" % [result, run_ore, int(run_xp)]
+	else:
+		message = "%s　今回の戦利品を失った" % result
+	needs_rest = true
+	_save_progress()
+	mode = Mode.HOME
+
+func _sleep() -> void:
+	var recovered_xp := pending_xp
+	level_xp += recovered_xp
+	pending_xp = 0.0
+	var leveled := false
+	while level_xp >= _need_xp():
+		level_xp -= _need_xp()
+		arm_level += 1
+		base_cap += 12.0
+		leveled = true
+	needs_rest = false
+	message = "超回復！ 腕力 Lv.%d" % arm_level if leveled else ("休息を終えた" if recovered_xp <= 0.0 else "休息で鍛錬を吸収した")
+	_save_progress()
+
+func _need_xp() -> float:
+	return 70.0 + arm_level * 55.0
+
+func _upgrade(kind: String) -> void:
+	var cost := 3 + cap_resist + lightness + efficiency
+	if ore < cost:
+		message = "鉱石が%d個必要" % cost
+		return
+	ore -= cost
+	if kind == "resist":
+		cap_resist += 1
+		message = "盾を補強した"
+	elif kind == "light":
+		lightness += 1
+		message = "盾を軽量化した"
+	else:
+		efficiency += 1
+		message = "盾の内張りを改良した"
+	_save_progress()
+
+func _input(event: InputEvent) -> void:
+	var pressed := false
+	var released := false
+	var pos := Vector2.ZERO
+	if event is InputEventScreenTouch:
+		pressed = event.pressed
+		released = not event.pressed
+		pos = event.position
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		pressed = event.pressed
+		released = not event.pressed
+		pos = event.position
+	if released:
+		held = false
+		return
+	if not pressed:
+		return
+	if mode == Mode.TITLE:
+		if Rect2(40, 510, 352, 58).has_point(pos) and has_save:
+			mode = Mode.HOME
+			message = "セーブデータから再開した"
+		elif Rect2(40, 580, 352, 58).has_point(pos):
+			_new_game()
+		return
+	if mode == Mode.HOME:
+		if Rect2(40, 505, 352, 58).has_point(pos):
+			_start_expedition()
+		elif Rect2(20, 575, 96, 58).has_point(pos):
+			_sleep()
+		elif Rect2(122, 575, 96, 58).has_point(pos):
+			_upgrade("resist")
+		elif Rect2(224, 575, 96, 58).has_point(pos):
+			_upgrade("light")
+		elif Rect2(326, 575, 86, 58).has_point(pos):
+			_upgrade("efficient")
+		return
+	if mode == Mode.BATTLE and recall_ready and Rect2(282, 688, 130, 35).has_point(pos):
+		_start_recall()
+		return
+	if mode in [Mode.BATTLE, Mode.RECALL] and exhausted_time <= 0.0:
+		held = true
+		raising_time = maxf(0.08, 0.18 + (1.0 - cap / base_cap) * 0.52 - lightness * 0.035)
+
+func _rock_pos(t: float) -> Vector2:
+	var depth := lerpf(7.0, 1.0, t)
+	var x := lerpf(1.80, -0.34, t)
+	# Solve the initial vertical velocity from the actual flight duration.
+	# Fast rocks travel on a flatter path; slow heavy rocks must be lobbed higher.
+	var seconds := t * attack_duration
+	var initial_velocity := (ROCK_END_HEIGHT - ROCK_START_HEIGHT + 0.5 * ROCK_GRAVITY * attack_duration * attack_duration) / attack_duration
+	var y := ROCK_START_HEIGHT + initial_velocity * seconds - 0.5 * ROCK_GRAVITY * seconds * seconds
+	return Vector2(CX + FOCAL * x / depth, HY - FOCAL * y / depth)
+
+func _rock_radius(t: float) -> float:
+	var size := 1.45 if attack_kind == "heavy" else (0.62 if attack_kind == "volley" else 1.0)
+	return FOCAL * 0.16 * size / lerpf(7.0, 1.0, t)
+
+func _play_sound(freq: float, duration: float, noise: float, drop: float) -> void:
+	tone_frequency = freq
+	tone_total = int(44100.0 * duration)
+	tone_frames = tone_total
+	tone_phase = 0.0
+	tone_noise = noise
+	tone_drop = drop
+
+func _fill_audio() -> void:
+	if audio_playback == null:
+		return
+	for _i in range(audio_playback.get_frames_available()):
+		var sample := 0.0
+		if tone_frames > 0:
+			var env := pow(float(tone_frames) / float(tone_total), 2.2)
+			sample = (sin(tone_phase) * 0.32 + sin(tone_phase * 2.02) * 0.10) * env
+			sample += randf_range(-1.0, 1.0) * tone_noise * env
+			var pitch := tone_frequency * (1.0 + tone_drop * (1.0 - env))
+			tone_phase += TAU * pitch / 44100.0
+			tone_frames -= 1
+		audio_playback.push_frame(Vector2(sample, sample))
+
+func _draw() -> void:
+	draw_texture_rect(HOME_ART if mode in [Mode.TITLE, Mode.HOME] else ART, Rect2(0, 0, W, H), false)
+	draw_rect(Rect2(0, 0, W, H), Color(0.02, 0.04, 0.10, 0.17), true)
+	if mode == Mode.TITLE:
+		_draw_title()
+	elif mode == Mode.HOME:
+		_draw_home()
+	else:
+		_draw_battle()
+
+func _draw_title() -> void:
+	draw_rect(Rect2(20, 80, 392, 190), Color(0.02, 0.04, 0.10, 0.82), true)
+	draw_string(JP_FONT, Vector2(62, 145), "護衛のリズム", HORIZONTAL_ALIGNMENT_LEFT, -1, 35, Color.WHITE)
+	draw_string(JP_FONT, Vector2(62, 180), "王女を守り、巨像に挑む。", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("d7c9f5"))
+	draw_string(JP_FONT, Vector2(62, 218), "セーブデータはこの端末に保存されます。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("a9bfdc"))
+	var continue_color := Color("4d6680") if has_save else Color("252d3a")
+	_button(Rect2(40, 510, 352, 58), "つづきから" if has_save else "つづきから（データなし）", continue_color)
+	_button(Rect2(40, 580, 352, 58), "はじめから", Color("76516f"))
+
+func _draw_home() -> void:
+	draw_rect(Rect2(20, 22, 392, 92), Color(0.02, 0.04, 0.10, 0.86), true)
+	draw_string(JP_FONT, Vector2(40, 52), "護衛の仮宿", HORIZONTAL_ALIGNMENT_LEFT, -1, 21, Color.WHITE)
+	draw_string(JP_FONT, Vector2(40, 78), "腕力 Lv.%d    経験値 %d / %d    今回 +%d" % [arm_level, int(level_xp), int(_need_xp()), int(pending_xp)], HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("c9daf5"))
+	draw_string(JP_FONT, Vector2(40, 101), "鉱石 %d    最大腕力 %d" % [ore, int(base_cap)], HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("f2d092"))
+	draw_rect(Rect2(30, 370, 372, 112), Color(0.02, 0.04, 0.10, 0.78), true)
+	draw_string(JP_FONT, Vector2(48, 400), "巨大ゴーレムが町を包囲している", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
+	draw_string(JP_FONT, Vector2(48, 427), "王女を守り、鉱石を持ち帰り、眠って強くなる。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("c9daf5"))
+	draw_string(JP_FONT, Vector2(48, 455), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f2a5c7"))
+	var expedition_color := Color("3a6384") if not needs_rest else Color("293846")
+	_button(Rect2(40, 505, 352, 58), "出撃 — ひび割れゴーレム" if not needs_rest else "眠るまで出撃できない", expedition_color)
+	_button(Rect2(20, 575, 96, 58), "眠る", Color("4d5979"))
+	_button(Rect2(122, 575, 96, 58), "補強", Color("5f556f"))
+	_button(Rect2(224, 575, 96, 58), "軽量化", Color("5f556f"))
+	_button(Rect2(326, 575, 86, 58), "節約", Color("5f556f"))
+	draw_string(JP_FONT, Vector2(36, 662), "盾：上限耐性 %d　構え速度 %d　省力化 %d" % [cap_resist, lightness, efficiency], HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("d9e5ff"))
+	if needs_rest:
+		draw_string(JP_FONT, Vector2(36, 688), "遠征後のため、眠ると次の出撃が可能になります。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f4c6d7"))
+
+func _draw_battle() -> void:
+	if flash > 0.0:
+		draw_rect(Rect2(0, 0, W, H), Color(0.62, 0.88, 1.0, flash * 0.42), true)
+	var path := PackedVector2Array()
+	for i in range(25):
+		path.append(_rock_pos(float(i) / 24.0))
+	draw_polyline(path, Color(0.45, 0.72, 0.98, 0.15), 2.0, true)
+	if attack_active:
+		var tip := _rock_pos(attack_t)
+		var before := _rock_pos(maxf(0.0, attack_t - 0.025))
+		var direction := (tip - before).normalized()
+		var wing := direction.orthogonal()
+		var radius := _rock_radius(attack_t)
+		draw_circle(tip + Vector2(radius * 0.24, radius * 0.34), radius * 1.16, Color(0.01, 0.02, 0.04, 0.48))
+		draw_colored_polygon(PackedVector2Array([tip - direction * radius, tip + wing * radius * 0.82, tip + direction * radius, tip - wing * radius * 0.82]), Color("555a72"))
+	if guarding:
+		draw_circle(SHIELD, 68, Color(0.25, 0.75, 1.0, 0.27))
+		draw_arc(SHIELD, 71, PI, TAU, 28, Color("d9f5ff"), 7)
+	elif mode == Mode.DOWNED:
+		draw_circle(SHIELD + Vector2(0, 32), 30, Color(0.01, 0.02, 0.05, 0.62))
+		draw_string(JP_FONT, Vector2(58, 568), "力尽きた", HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color("f2a5c7"))
+	_draw_hud()
+
+func _draw_hud() -> void:
+	draw_rect(Rect2(16, 18, 400, 92), Color(0.02, 0.04, 0.10, 0.84), true)
+	draw_string(JP_FONT, Vector2(32, 44), "ひび割れゴーレム", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color.WHITE)
+	draw_rect(Rect2(32, 53, 240, 10), Color("2c2940"), true)
+	draw_rect(Rect2(32, 53, 240 * boss_hp / boss_hp_max, 10), Color("d8709b"), true)
+	draw_string(JP_FONT, Vector2(288, 63), "敵HP %d%%" % int(100.0 * boss_hp / boss_hp_max), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f3c8d7"))
+	draw_string(JP_FONT, Vector2(32, 86), "腕力 %d / %d" % [int(stamina), int(cap)], HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("d9e5ff"))
+	draw_rect(Rect2(112, 76, 160, 11), Color("102038"), true)
+	draw_rect(Rect2(112, 76, 160 * cap / base_cap, 11), Color("355d8d"), true)
+	draw_rect(Rect2(112, 76, 160 * stamina / base_cap, 11), Color("66c8d9"), true)
+	draw_string(JP_FONT, Vector2(288, 86), "王女 %d" % princess_hp, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("f2a5c7"))
+	draw_rect(Rect2(16, 731, 400, 25), Color(0.02, 0.04, 0.10, 0.84), true)
+	draw_string(JP_FONT, Vector2(28, 749), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("e8f1ff"))
+	if recall_ready and mode == Mode.BATTLE:
+		_button(Rect2(282, 688, 130, 35), "帰還する", Color("8a4f91"))
+		draw_string(JP_FONT, Vector2(29, 712), "帰還魔法の準備完了", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("f0bbff"))
+	elif not recall_ready:
+		draw_string(JP_FONT, Vector2(29, 712), "帰還準備：防御 %d / 4 回" % blocks, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("d6c8ed"))
+
+func _button(rect: Rect2, label: String, color: Color) -> void:
+	draw_rect(rect, color, true)
+	draw_rect(rect, Color("b7d6ec"), false, 1.0)
+	draw_string(JP_FONT, Vector2(rect.position.x + 8, rect.position.y + rect.size.y * 0.62), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color.WHITE)
