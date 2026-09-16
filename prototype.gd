@@ -22,6 +22,8 @@ const SAVE_SLOT_COUNT := 3
 var mode := Mode.TITLE
 var title_panel := TitlePanel.MAIN
 var home_panel := HomePanel.MAIN
+var equipment_page := 0
+var armorer_page := 0
 var selected_slot := -1
 var save_slots: Array = []
 var needs_rest := false
@@ -46,7 +48,12 @@ const SHIELDS := [
 	{"id": "moon_iron_2", "name": "月鉄の大円盾", "cost": 6, "resist": 2, "light": 0, "efficient": 0, "note": "上限耐性に特化したLv.2盾"},
 	{"id": "wind_crest_2", "name": "風紋の小盾", "cost": 6, "resist": 0, "light": 2, "efficient": 0, "note": "構え速度に特化したLv.2盾"},
 	{"id": "black_leather_2", "name": "黒革の塔盾", "cost": 8, "resist": 0, "light": 0, "efficient": 2, "note": "省力化に特化したLv.2盾"},
+	{"id": "moon_iron_3", "name": "月鉄の城壁盾", "cost": 9, "resist": 3, "light": 0, "efficient": 0, "note": "上限耐性に特化したLv.3盾"},
+	{"id": "wind_crest_3", "name": "風紋の翼盾", "cost": 9, "resist": 0, "light": 3, "efficient": 0, "note": "構え速度に特化したLv.3盾"},
+	{"id": "black_leather_3", "name": "黒革の城砦盾", "cost": 12, "resist": 0, "light": 0, "efficient": 3, "note": "省力化に特化したLv.3盾"},
 ]
+
+const COLLECTION_PER_PAGE := 5
 
 # Expedition state. Boss health is reset on every departure.
 var cap := 100.0
@@ -368,6 +375,9 @@ func _apply_shield_effects() -> void:
 func _shield_stats_text(shield: Dictionary) -> String:
 	return "上限耐性 +%d　構え速度 +%d　省力化 +%d" % [int(shield["resist"]), int(shield["light"]), int(shield["efficient"])]
 
+func _page_count(item_count: int) -> int:
+	return maxi(1, int(ceil(float(item_count) / float(COLLECTION_PER_PAGE))))
+
 func _show_dialog(title: String, body: String) -> void:
 	dialog_title = title
 	dialog_body = body
@@ -448,10 +458,18 @@ func _input(event: InputEvent) -> void:
 		return
 	if mode == Mode.HOME:
 		if home_panel == HomePanel.EQUIPMENT:
-			for index in range(owned_shields.size()):
-				if Rect2(24, 370 + index * 39, 384, 35).has_point(pos):
+			var owned_start := equipment_page * COLLECTION_PER_PAGE
+			var owned_end := mini(owned_shields.size(), owned_start + COLLECTION_PER_PAGE)
+			for index in range(owned_start, owned_end):
+				if Rect2(24, 370 + (index - owned_start) * 47, 384, 43).has_point(pos):
 					_equip_shield(str(owned_shields[index]))
 					return
+			if Rect2(24, 620, 186, 40).has_point(pos) and equipment_page > 0:
+				equipment_page -= 1
+				return
+			if Rect2(222, 620, 186, 40).has_point(pos) and equipment_page < _page_count(owned_shields.size()) - 1:
+				equipment_page += 1
+				return
 			if Rect2(24, 670, 384, 42).has_point(pos):
 				home_panel = HomePanel.MAIN
 			return
@@ -461,15 +479,26 @@ func _input(event: InputEvent) -> void:
 			_sleep()
 		elif Rect2(154, 575, 124, 58).has_point(pos):
 			home_panel = HomePanel.EQUIPMENT
+			equipment_page = 0
 		elif Rect2(288, 575, 124, 58).has_point(pos):
 			mode = Mode.ARMORER
+			armorer_page = 0
 			message = "鉱石を使って新しい盾を作ろう"
 		return
 	if mode == Mode.ARMORER:
-		for index in range(1, SHIELDS.size()):
-			if Rect2(24, 378 + (index - 1) * 47, 384, 43).has_point(pos):
+		var recipe_start := 1 + armorer_page * COLLECTION_PER_PAGE
+		var recipe_end := mini(SHIELDS.size(), recipe_start + COLLECTION_PER_PAGE)
+		for index in range(recipe_start, recipe_end):
+			if Rect2(24, 378 + (index - recipe_start) * 47, 384, 43).has_point(pos):
 				_craft_shield(str(SHIELDS[index]["id"]))
 				return
+		var recipe_count := SHIELDS.size() - 1
+		if Rect2(24, 620, 186, 40).has_point(pos) and armorer_page > 0:
+			armorer_page -= 1
+			return
+		if Rect2(222, 620, 186, 40).has_point(pos) and armorer_page < _page_count(recipe_count) - 1:
+			armorer_page += 1
+			return
 		if Rect2(24, 674, 384, 42).has_point(pos):
 			mode = Mode.HOME
 		return
@@ -593,13 +622,19 @@ func _draw_equipment() -> void:
 	draw_string(JP_FONT, Vector2(38, 78), "所持している盾を選んで装備します。", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("c9daf5"))
 	draw_string(JP_FONT, Vector2(38, 100), "変更は、眠ったときに保存されます。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f2d092"))
 	draw_rect(Rect2(18, 354, 396, 300), Color(0.02, 0.04, 0.10, 0.84), true)
-	for index in range(owned_shields.size()):
+	var owned_start := equipment_page * COLLECTION_PER_PAGE
+	var owned_end := mini(owned_shields.size(), owned_start + COLLECTION_PER_PAGE)
+	for index in range(owned_start, owned_end):
 		var shield := _shield_data(str(owned_shields[index]))
 		var equipped := str(owned_shields[index]) == equipped_shield
 		var label := "%s　%s" % [str(shield["name"]), _shield_stats_text(shield)]
 		if equipped:
 			label += "　【装備中】"
-		_button(Rect2(24, 370 + index * 39, 384, 35), label, Color("6d547d") if equipped else Color("536f7b"))
+		_button(Rect2(24, 370 + (index - owned_start) * 47, 384, 43), label, Color("6d547d") if equipped else Color("536f7b"))
+	var owned_pages := _page_count(owned_shields.size())
+	_button(Rect2(24, 620, 186, 40), "前のページ", Color("3e4a61") if equipment_page > 0 else Color("293846"))
+	_button(Rect2(222, 620, 186, 40), "次のページ", Color("3e4a61") if equipment_page < owned_pages - 1 else Color("293846"))
+	draw_string(JP_FONT, Vector2(184, 645), "%d / %d" % [equipment_page + 1, owned_pages], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("d9e5ff"))
 	_button(Rect2(24, 670, 384, 42), "戻る", Color("3e4a61"))
 
 func _draw_armorer() -> void:
@@ -609,17 +644,23 @@ func _draw_armorer() -> void:
 	draw_string(JP_FONT, Vector2(38, 99), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("d9e5ff"))
 	draw_rect(Rect2(18, 346, 396, 318), Color(0.02, 0.04, 0.10, 0.84), true)
 	draw_string(JP_FONT, Vector2(38, 369), "性能を確認して、素材から盾を作る。装備は自室で。", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("c9daf5"))
-	for index in range(1, SHIELDS.size()):
+	var recipe_start := 1 + armorer_page * COLLECTION_PER_PAGE
+	var recipe_end := mini(SHIELDS.size(), recipe_start + COLLECTION_PER_PAGE)
+	for index in range(recipe_start, recipe_end):
 		var shield: Dictionary = SHIELDS[index]
 		var id := str(shield["id"])
 		var owned := owned_shields.has(id)
-		var rect := Rect2(24, 378 + (index - 1) * 47, 384, 43)
+		var rect := Rect2(24, 378 + (index - recipe_start) * 47, 384, 43)
 		var color := Color("785a45") if not owned else Color("435562")
 		draw_rect(rect, color, true)
 		draw_rect(rect, Color("b7d6ec"), false, 1.0)
 		var status := "所持済み" if owned else "鉱石 %d" % int(shield["cost"])
 		draw_string(JP_FONT, Vector2(34, rect.position.y + 17), "%s　%s" % [str(shield["name"]), status], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color.WHITE)
 		draw_string(JP_FONT, Vector2(34, rect.position.y + 34), _shield_stats_text(shield), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("d9e5ff"))
+	var recipe_pages := _page_count(SHIELDS.size() - 1)
+	_button(Rect2(24, 620, 186, 40), "前の5種", Color("3e4a61") if armorer_page > 0 else Color("293846"))
+	_button(Rect2(222, 620, 186, 40), "次の5種", Color("3e4a61") if armorer_page < recipe_pages - 1 else Color("293846"))
+	draw_string(JP_FONT, Vector2(184, 645), "%d / %d" % [armorer_page + 1, recipe_pages], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("d9e5ff"))
 	_button(Rect2(24, 674, 384, 42), "自室へ戻る", Color("3e4a61"))
 
 func _draw_battle() -> void:
