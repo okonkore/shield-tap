@@ -74,6 +74,8 @@ var message := "出撃してゴーレムに挑もう"
 var dialog_visible := false
 var dialog_title := ""
 var dialog_body := ""
+var last_press_msec := -1000
+var last_press_pos := Vector2(-999.0, -999.0)
 
 const PATTERN := [
 	{"kind": "stone", "wait": 0.70}, {"kind": "stone", "wait": 0.55},
@@ -413,6 +415,13 @@ func _input(event: InputEvent) -> void:
 		return
 	if not pressed:
 		return
+	# Mobile browsers can report one physical tap as both touch and mouse input.
+	# Ignore only the immediate duplicate at the same position, so it cannot act on a new screen.
+	var now_msec := Time.get_ticks_msec()
+	if now_msec - last_press_msec < 180 and pos.distance_to(last_press_pos) < 10.0:
+		return
+	last_press_msec = now_msec
+	last_press_pos = pos
 	if dialog_visible:
 		dialog_visible = false
 		return
