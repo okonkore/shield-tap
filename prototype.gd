@@ -19,6 +19,7 @@ const ROCK_GRAVITY := 8.0
 const ORE_DAMAGE_STEP := 14.0
 const PRINCESS_CAST_PERIOD := 3.0
 const PRINCESS_CHANT_RATIO := 0.48
+const RECALL_CHANT_DURATION := 5.2
 
 enum Mode { TITLE, HOME, ARMORER, BATTLE, RECALL, DOWNED }
 enum TitlePanel { MAIN, CONTINUE, NEW_GAME }
@@ -384,7 +385,7 @@ func _start_expedition() -> void:
 func _start_recall() -> void:
 	if recall_ready and mode == Mode.BATTLE:
 		mode = Mode.RECALL
-		recall_time = 2.6
+		recall_time = RECALL_CHANT_DURATION
 		message = "帰還魔法を守れ"
 
 func _finish(success: bool, result: String) -> void:
@@ -770,7 +771,7 @@ func _draw_princess_attack() -> void:
 func _draw_recall_effect() -> void:
 	if mode != Mode.RECALL:
 		return
-	var progress := clampf(1.0 - recall_time / 2.6, 0.0, 1.0)
+	var progress := clampf(1.0 - recall_time / RECALL_CHANT_DURATION, 0.0, 1.0)
 	var center := PRINCESS_CAST
 	var radius := lerpf(38.0, 106.0, progress)
 	var spin := battle_clock * 3.8
