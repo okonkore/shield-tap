@@ -21,6 +21,7 @@ const ORE_DAMAGE_STEP := 14.0
 const PRINCESS_CAST_PERIOD := 3.0
 const PRINCESS_CHANT_RATIO := 0.48
 const RECALL_CHANT_DURATION := 5.2
+const SHIELD_POINT_BONUS := 0.18
 
 enum Mode { TITLE, HOME, ARMORER, BATTLE, RECALL, DOWNED }
 enum TitlePanel { MAIN, CONTINUE, NEW_GAME }
@@ -295,7 +296,7 @@ func _update_guard(delta: float) -> void:
 		_drop_shield(delta)
 	if guarding:
 		shield_lift = 1.0
-		stamina = maxf(0.0, stamina - 17.0 * (1.0 - efficiency * 0.09) * delta)
+		stamina = maxf(0.0, stamina - 17.0 * (1.0 - efficiency * SHIELD_POINT_BONUS) * delta)
 		if stamina <= 0.0:
 			guarding = false
 			held = false
@@ -349,7 +350,7 @@ func _resolve_attack() -> void:
 
 func _block() -> void:
 	var attack_power := _attack_power()
-	var cap_cost := attack_power * (1.0 - cap_resist * 0.10)
+	var cap_cost := attack_power * maxf(0.0, 1.0 - cap_resist * SHIELD_POINT_BONUS)
 	stamina = maxf(0.0, stamina - cap_cost * 0.72)
 	cap = maxf(0.0, cap - cap_cost)
 	# Training follows the enemy's original attack power, not the shield's mitigated damage.
@@ -479,7 +480,7 @@ func _apply_shield_effects() -> void:
 	efficiency = int(shield["efficient"])
 
 func _shield_stats_text(shield: Dictionary) -> String:
-	return "重さ %d　上限耐性 +%d　省力化 +%d" % [int(shield["weight"]), int(shield["resist"]), int(shield["efficient"])]
+	return "重さ %d　上限耐性 %d%%　省力化 %d%%" % [int(shield["weight"]), int(float(shield["resist"]) * SHIELD_POINT_BONUS * 100.0), int(float(shield["efficient"]) * SHIELD_POINT_BONUS * 100.0)]
 
 func _page_count(item_count: int) -> int:
 	return maxi(1, int(ceil(float(item_count) / float(COLLECTION_PER_PAGE))))
@@ -627,8 +628,8 @@ func _input(event: InputEvent) -> void:
 		shield_drop_speed = 0.0
 		shield_ground_impact = 0.0
 		var shield_weight := float(_shield_data(equipped_shield)["weight"])
-		# Weight tiers 1/2/3 map to practical timing factors 1.0/1.25/1.5.
-		var weight_factor := 1.0 + (shield_weight - 1.0) * 0.25
+		# Weight tiers 1/2/3 map to modest timing factors 1.0/1.125/1.25.
+		var weight_factor := 1.0 + (shield_weight - 1.0) * 0.125
 		raise_total = maxf(0.08, 0.18 + (1.0 - cap / base_cap) * 0.52) * weight_factor
 		raising_time = raise_total
 
@@ -898,7 +899,7 @@ func _draw_battle() -> void:
 	_draw_hud()
 
 func _draw_hud() -> void:
-	draw_rect(Rect2(16, 18, 400, 112), Color(0.02, 0.04, 0.10, 0.84), true)
+	draw_rect(Rect2(16, 18, 400, 134), Color(0.02, 0.04, 0.10, 0.84), true)
 	draw_string(JP_FONT, Vector2(32, 44), str(_boss_data()["name"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color.WHITE)
 	draw_rect(Rect2(32, 53, 240, 10), Color("2c2940"), true)
 	draw_rect(Rect2(32, 53, 240 * boss_hp / boss_hp_max, 10), Color("d8709b"), true)
@@ -909,6 +910,9 @@ func _draw_hud() -> void:
 	draw_rect(Rect2(112, 76, 160 * stamina / base_cap, 11), Color("66c8d9"), true)
 	draw_string(JP_FONT, Vector2(288, 86), "王女 %d" % princess_hp, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("f2a5c7"))
 	draw_string(JP_FONT, Vector2(32, 112), "王女の採掘　鉱石 +%d　次の欠片まで %.0f" % [run_ore, maxf(0.0, ORE_DAMAGE_STEP - mined_damage)], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("caa5ff"))
+	var heavy_power := 23.0 * (1.32 if selected_boss == "four_arm" else 1.0)
+	var protected_cost := heavy_power * maxf(0.0, 1.0 - cap_resist * SHIELD_POINT_BONUS)
+	draw_string(JP_FONT, Vector2(32, 136), "重攻撃の上限減少　-%d → -%d" % [int(ceil(heavy_power)), int(ceil(protected_cost))], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("a9dff0"))
 	draw_rect(Rect2(16, 731, 400, 25), Color(0.02, 0.04, 0.10, 0.84), true)
 	draw_string(JP_FONT, Vector2(28, 749), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("e8f1ff"))
 	if recall_ready and mode == Mode.BATTLE:
