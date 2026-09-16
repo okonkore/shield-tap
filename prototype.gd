@@ -14,9 +14,11 @@ const ROCK_END_HEIGHT := -1.05
 const ROCK_GRAVITY := 8.0
 
 enum Mode { TITLE, HOME, BATTLE, RECALL, DOWNED }
+enum TitlePanel { MAIN, CONTINUE, NEW_GAME }
 const SAVE_KEY_PREFIX := "shield-tap-save-v2-"
 const SAVE_SLOT_COUNT := 3
 var mode := Mode.TITLE
+var title_panel := TitlePanel.MAIN
 var selected_slot := -1
 var save_slots: Array = []
 var needs_rest := false
@@ -131,6 +133,7 @@ func _continue_game(slot: int) -> void:
 	_apply_save(data)
 	message = "セーブ%dから再開した" % (slot + 1)
 	mode = Mode.HOME
+	title_panel = TitlePanel.MAIN
 
 func _save_progress() -> void:
 	if selected_slot < 0:
@@ -159,8 +162,8 @@ func _new_game(slot: int) -> void:
 	efficiency = 0
 	needs_rest = false
 	message = "出撃してゴーレムに挑もう"
-	_save_progress()
 	mode = Mode.HOME
+	title_panel = TitlePanel.MAIN
 
 func _process_expedition(delta: float) -> void:
 	# The princess damages the boss continuously. A successful full fight takes about 100 seconds.
@@ -300,7 +303,6 @@ func _finish(success: bool, result: String) -> void:
 	else:
 		message = "%s　今回の戦利品を失った" % result
 	needs_rest = true
-	_save_progress()
 	mode = Mode.HOME
 
 func _sleep() -> void:
@@ -335,7 +337,6 @@ func _upgrade(kind: String) -> void:
 	else:
 		efficiency += 1
 		message = "盾の内張りを改良した"
-	_save_progress()
 
 func _input(event: InputEvent) -> void:
 	var pressed := false
@@ -355,15 +356,25 @@ func _input(event: InputEvent) -> void:
 	if not pressed:
 		return
 	if mode == Mode.TITLE:
+		if title_panel == TitlePanel.MAIN:
+			if Rect2(40, 390, 352, 58).has_point(pos):
+				title_panel = TitlePanel.CONTINUE
+			elif Rect2(40, 464, 352, 58).has_point(pos):
+				title_panel = TitlePanel.NEW_GAME
+			return
 		for slot in range(SAVE_SLOT_COUNT):
-			var row_y := 390.0 + slot * 92.0
+			var row_y := 338.0 + slot * 76.0
 			var slot_data: Dictionary = save_slots[slot]
-			if Rect2(40, row_y, 226, 58).has_point(pos) and not slot_data.is_empty():
+			if not Rect2(40, row_y, 352, 58).has_point(pos):
+				continue
+			if title_panel == TitlePanel.CONTINUE and not slot_data.is_empty():
 				_continue_game(slot)
 				return
-			if Rect2(276, row_y, 116, 58).has_point(pos):
+			if title_panel == TitlePanel.NEW_GAME:
 				_new_game(slot)
 				return
+		if Rect2(40, 594, 352, 48).has_point(pos):
+			title_panel = TitlePanel.MAIN
 		return
 	if mode == Mode.HOME:
 		if Rect2(40, 505, 352, 58).has_point(pos):
@@ -434,18 +445,30 @@ func _draw_title() -> void:
 	draw_rect(Rect2(20, 74, 392, 220), Color(0.02, 0.04, 0.10, 0.82), true)
 	draw_string(JP_FONT, Vector2(62, 145), "護衛のリズム", HORIZONTAL_ALIGNMENT_LEFT, -1, 35, Color.WHITE)
 	draw_string(JP_FONT, Vector2(62, 180), "王女を守り、巨像に挑む。", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("d7c9f5"))
-	draw_string(JP_FONT, Vector2(62, 218), "セーブ枠を選んでください。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("a9bfdc"))
-	draw_string(JP_FONT, Vector2(62, 250), "データはこの端末に保存されます。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("a9bfdc"))
+	if title_panel == TitlePanel.MAIN:
+		draw_string(JP_FONT, Vector2(62, 218), "データは眠ったときに、この端末へ保存されます。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("a9bfdc"))
+		_button(Rect2(40, 390, 352, 58), "つづきから", Color("4d6680"))
+		_button(Rect2(40, 464, 352, 58), "はじめから", Color("76516f"))
+		return
+	var heading := "つづきから — セーブデータを選ぶ" if title_panel == TitlePanel.CONTINUE else "はじめから — 保存先を選ぶ"
+	draw_string(JP_FONT, Vector2(62, 218), heading, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("d7c9f5"))
+	draw_string(JP_FONT, Vector2(62, 250), "つづきからは、自室から再開します。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("a9bfdc"))
 	for slot in range(SAVE_SLOT_COUNT):
-		var row_y := 390.0 + slot * 92.0
+		var row_y := 338.0 + slot * 76.0
 		var slot_data: Dictionary = save_slots[slot]
-		var slot_label := "セーブ%d：空き" % (slot + 1)
+		var slot_label := "セーブ%d：データなし" % (slot + 1)
 		var continue_color := Color("252d3a")
 		if not slot_data.is_empty():
 			slot_label = "セーブ%d：腕力 Lv.%d　鉱石 %d" % [slot + 1, int(slot_data.get("arm_level", 1)), int(slot_data.get("ore", 0))]
 			continue_color = Color("4d6680")
-		_button(Rect2(40, row_y, 226, 58), slot_label, continue_color)
-		_button(Rect2(276, row_y, 116, 58), "はじめから", Color("76516f"))
+		if title_panel == TitlePanel.NEW_GAME:
+			var new_label := "セーブ%dで始める" % (slot + 1)
+			if not slot_data.is_empty():
+				new_label += "（上書き）"
+			_button(Rect2(40, row_y, 352, 58), new_label, Color("76516f"))
+		else:
+			_button(Rect2(40, row_y, 352, 58), slot_label, continue_color)
+	_button(Rect2(40, 594, 352, 48), "戻る", Color("3e4a61"))
 
 func _draw_home() -> void:
 	draw_rect(Rect2(20, 22, 392, 92), Color(0.02, 0.04, 0.10, 0.86), true)
