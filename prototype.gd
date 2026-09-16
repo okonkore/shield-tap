@@ -260,9 +260,10 @@ func _princess_magic_hit() -> void:
 func _update_guard(delta: float) -> void:
 	if held and not guarding:
 		raising_time -= delta
-		# A quick heave: it rises rapidly after the initial effort, then settles into guard.
+		# A vertical ballistic heave: quick at first, slowing at the apex, then settling into guard.
 		var lift_progress := clampf(1.0 - raising_time / maxf(raise_total, 0.001), 0.0, 1.0)
-		shield_lift = ease(lift_progress, -2.4)
+		# y = 2.748t - 1.748t²: apex is 8% above the guard position at t ≈ 0.79.
+		shield_lift = 2.748 * lift_progress - 1.748 * lift_progress * lift_progress
 		shield_drop_speed = 0.0
 		shield_ground_impact = 0.0
 		if raising_time <= 0.0:
@@ -801,10 +802,8 @@ func _draw_battle() -> void:
 		var radius := _rock_radius(attack_t)
 		draw_circle(tip + Vector2(radius * 0.24, radius * 0.34), radius * 1.16, Color(0.01, 0.02, 0.04, 0.48))
 		draw_colored_polygon(PackedVector2Array([tip - direction * radius, tip + wing * radius * 0.82, tip + direction * radius, tip - wing * radius * 0.82]), Color("555a72"))
-	# The shield is always visible. A lift follows a small forward arc; release lets it fall under gravity.
-	var lift_progress := clampf(1.0 - raising_time / maxf(raise_total, 0.001), 0.0, 1.0) if held and not guarding else shield_lift
-	var lift_arc := -sin(lift_progress * PI) * 18.0 if held and not guarding else 0.0
-	var shield_pos := SHIELD_FOOT.lerp(SHIELD, shield_lift) + Vector2(lift_arc, 0.0)
+	# The shield rises straight upward, overshoots its guard point a little, then settles back down.
+	var shield_pos := SHIELD_FOOT.lerp(SHIELD, shield_lift)
 	var impact_ratio := shield_ground_impact / 0.20
 	shield_pos.y += impact_ratio * 8.0
 	var shield_radius := lerpf(42.0, 68.0, shield_lift) * (1.0 - impact_ratio * 0.12)
