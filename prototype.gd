@@ -16,10 +16,12 @@ const ROCK_GRAVITY := 8.0
 
 enum Mode { TITLE, HOME, ARMORER, BATTLE, RECALL, DOWNED }
 enum TitlePanel { MAIN, CONTINUE, NEW_GAME }
+enum HomePanel { MAIN, EQUIPMENT }
 const SAVE_KEY_PREFIX := "shield-tap-save-v2-"
 const SAVE_SLOT_COUNT := 3
 var mode := Mode.TITLE
 var title_panel := TitlePanel.MAIN
+var home_panel := HomePanel.MAIN
 var selected_slot := -1
 var save_slots: Array = []
 var needs_rest := false
@@ -41,6 +43,9 @@ const SHIELDS := [
 	{"id": "moon_iron", "name": "月鉄の丸盾", "cost": 3, "resist": 1, "light": 0, "efficient": 0, "note": "最大腕力が削られにくい"},
 	{"id": "wind_crest", "name": "風紋の盾", "cost": 3, "resist": 0, "light": 1, "efficient": 0, "note": "盾を素早く構えられる"},
 	{"id": "black_leather", "name": "黒革の大盾", "cost": 4, "resist": 0, "light": 0, "efficient": 1, "note": "構えている間の消耗が少ない"},
+	{"id": "moon_iron_2", "name": "月鉄の大円盾", "cost": 6, "resist": 2, "light": 0, "efficient": 0, "note": "上限耐性に特化したLv.2盾"},
+	{"id": "wind_crest_2", "name": "風紋の小盾", "cost": 6, "resist": 0, "light": 2, "efficient": 0, "note": "構え速度に特化したLv.2盾"},
+	{"id": "black_leather_2", "name": "黒革の塔盾", "cost": 8, "resist": 0, "light": 0, "efficient": 2, "note": "省力化に特化したLv.2盾"},
 ]
 
 # Expedition state. Boss health is reset on every departure.
@@ -66,6 +71,9 @@ var attack_wait := 1.0
 var attack_index := 0
 var flash := 0.0
 var message := "出撃してゴーレムに挑もう"
+var dialog_visible := false
+var dialog_title := ""
+var dialog_body := ""
 
 const PATTERN := [
 	{"kind": "stone", "wait": 0.70}, {"kind": "stone", "wait": 0.55},
@@ -286,6 +294,7 @@ func _damage_princess(damage: int) -> void:
 func _start_expedition() -> void:
 	if needs_rest:
 		message = "遠征から帰った。まず眠って休もう"
+		_show_dialog("休息が必要", "遠征から戻った後は、眠るまで再び出撃できません。")
 		return
 	mode = Mode.BATTLE
 	boss_hp = boss_hp_max
@@ -314,8 +323,10 @@ func _finish(success: bool, result: String) -> void:
 		ore += run_ore
 		pending_xp += run_xp
 		message = "%s　鉱石 +%d　経験値 +%d" % [result, run_ore, int(run_xp)]
+		_show_dialog(result, "鉱石 +%d\n経験値 +%d\n眠ると記録されます。" % [run_ore, int(run_xp)])
 	else:
 		message = "%s　今回の戦利品を失った" % result
+		_show_dialog(result, "今回の戦利品と鍛錬は失われました。\n眠ると次の遠征へ出られます。")
 	needs_rest = true
 	mode = Mode.HOME
 
@@ -323,15 +334,19 @@ func _sleep() -> void:
 	var recovered_xp := pending_xp
 	level_xp += recovered_xp
 	pending_xp = 0.0
-	var leveled := false
+	var levels_gained := 0
 	while level_xp >= _need_xp():
 		level_xp -= _need_xp()
 		arm_level += 1
 		base_cap += 12.0
-		leveled = true
+		levels_gained += 1
 	needs_rest = false
-	message = "超回復！ 腕力 Lv.%d" % arm_level if leveled else ("休息を終えた" if recovered_xp <= 0.0 else "休息で鍛錬を吸収した")
+	message = "超回復！ 腕力 Lv.%d" % arm_level if levels_gained > 0 else ("休息を終えた" if recovered_xp <= 0.0 else "休息で鍛錬を吸収した")
 	_save_progress()
+	if levels_gained > 0:
+		_show_dialog("腕力レベルアップ！", "腕力 Lv.%d\n最大腕力 +%d\nセーブしました。" % [arm_level, levels_gained * 12])
+	else:
+		_show_dialog("休息を終えた", "鍛錬を吸収しました。\nセーブしました。")
 
 func _need_xp() -> float:
 	return 70.0 + arm_level * 55.0
@@ -348,22 +363,38 @@ func _apply_shield_effects() -> void:
 	lightness = int(shield["light"])
 	efficiency = int(shield["efficient"])
 
-func _craft_or_equip(id: String) -> void:
+func _shield_stats_text(shield: Dictionary) -> String:
+	return "上限耐性 +%d　構え速度 +%d　省力化 +%d" % [int(shield["resist"]), int(shield["light"]), int(shield["efficient"])]
+
+func _show_dialog(title: String, body: String) -> void:
+	dialog_title = title
+	dialog_body = body
+	dialog_visible = true
+
+func _craft_shield(id: String) -> void:
 	var shield := _shield_data(id)
 	if owned_shields.has(id):
-		equipped_shield = id
-		_apply_shield_effects()
-		message = "%sを装備した" % str(shield["name"])
+		_show_dialog("すでに所持しています", "装備は自室で切り替えられます。")
 		return
 	var cost := int(shield["cost"])
 	if ore < cost:
 		message = "鉱石が%d個必要" % cost
+		_show_dialog("素材が足りない", "鉱石が%d個必要です。\n今は鉱石 %d個です。" % [cost, ore])
 		return
 	ore -= cost
 	owned_shields.append(id)
+	message = "%sを作成した" % str(shield["name"])
+	_show_dialog("新しい盾を作成！", "%s\n%s\n装備は自室で切り替えられます。" % [str(shield["name"]), _shield_stats_text(shield)])
+
+func _equip_shield(id: String) -> void:
+	if not owned_shields.has(id):
+		return
 	equipped_shield = id
 	_apply_shield_effects()
-	message = "%sを作成して装備した" % str(shield["name"])
+	var shield := _shield_data(id)
+	message = "%sを装備した" % str(shield["name"])
+	home_panel = HomePanel.MAIN
+	_show_dialog("盾を装備した", "%s\n%s\n眠ると記録されます。" % [str(shield["name"]), _shield_stats_text(shield)])
 
 func _input(event: InputEvent) -> void:
 	var pressed := false
@@ -381,6 +412,9 @@ func _input(event: InputEvent) -> void:
 		held = false
 		return
 	if not pressed:
+		return
+	if dialog_visible:
+		dialog_visible = false
 		return
 	if mode == Mode.TITLE:
 		if title_panel == TitlePanel.MAIN:
@@ -404,20 +438,30 @@ func _input(event: InputEvent) -> void:
 			title_panel = TitlePanel.MAIN
 		return
 	if mode == Mode.HOME:
+		if home_panel == HomePanel.EQUIPMENT:
+			for index in range(owned_shields.size()):
+				if Rect2(24, 370 + index * 39, 384, 35).has_point(pos):
+					_equip_shield(str(owned_shields[index]))
+					return
+			if Rect2(24, 670, 384, 42).has_point(pos):
+				home_panel = HomePanel.MAIN
+			return
 		if Rect2(40, 505, 352, 58).has_point(pos):
 			_start_expedition()
-		elif Rect2(20, 575, 185, 58).has_point(pos):
+		elif Rect2(20, 575, 124, 58).has_point(pos):
 			_sleep()
-		elif Rect2(227, 575, 185, 58).has_point(pos):
+		elif Rect2(154, 575, 124, 58).has_point(pos):
+			home_panel = HomePanel.EQUIPMENT
+		elif Rect2(288, 575, 124, 58).has_point(pos):
 			mode = Mode.ARMORER
 			message = "鉱石を使って新しい盾を作ろう"
 		return
 	if mode == Mode.ARMORER:
 		for index in range(1, SHIELDS.size()):
-			if Rect2(28, 440 + (index - 1) * 66, 376, 56).has_point(pos):
-				_craft_or_equip(str(SHIELDS[index]["id"]))
+			if Rect2(24, 378 + (index - 1) * 47, 384, 43).has_point(pos):
+				_craft_shield(str(SHIELDS[index]["id"]))
 				return
-		if Rect2(28, 664, 376, 48).has_point(pos):
+		if Rect2(24, 674, 384, 42).has_point(pos):
 			mode = Mode.HOME
 		return
 	if mode == Mode.BATTLE and recall_ready and Rect2(282, 688, 130, 35).has_point(pos):
@@ -479,6 +523,8 @@ func _draw() -> void:
 		_draw_armorer()
 	else:
 		_draw_battle()
+	if dialog_visible:
+		_draw_dialog()
 
 func _draw_title() -> void:
 	draw_rect(Rect2(20, 74, 392, 220), Color(0.02, 0.04, 0.10, 0.82), true)
@@ -510,6 +556,9 @@ func _draw_title() -> void:
 	_button(Rect2(40, 594, 352, 48), "戻る", Color("3e4a61"))
 
 func _draw_home() -> void:
+	if home_panel == HomePanel.EQUIPMENT:
+		_draw_equipment()
+		return
 	draw_rect(Rect2(20, 22, 392, 92), Color(0.02, 0.04, 0.10, 0.86), true)
 	draw_string(JP_FONT, Vector2(40, 52), "護衛の仮宿", HORIZONTAL_ALIGNMENT_LEFT, -1, 21, Color.WHITE)
 	draw_string(JP_FONT, Vector2(40, 78), "腕力 Lv.%d    経験値 %d / %d    今回 +%d" % [arm_level, int(level_xp), int(_need_xp()), int(pending_xp)], HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("c9daf5"))
@@ -520,36 +569,49 @@ func _draw_home() -> void:
 	draw_string(JP_FONT, Vector2(48, 455), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f2a5c7"))
 	var expedition_color := Color("3a6384") if not needs_rest else Color("293846")
 	_button(Rect2(40, 505, 352, 58), "出撃 — ひび割れゴーレム" if not needs_rest else "眠るまで出撃できない", expedition_color)
-	_button(Rect2(20, 575, 185, 58), "眠る（ここで保存）", Color("4d5979"))
-	_button(Rect2(227, 575, 185, 58), "防具屋へ", Color("785a45"))
+	_button(Rect2(20, 575, 124, 58), "眠る", Color("4d5979"))
+	_button(Rect2(154, 575, 124, 58), "盾を装備", Color("536f7b"))
+	_button(Rect2(288, 575, 124, 58), "防具屋へ", Color("785a45"))
 	var shield := _shield_data(equipped_shield)
 	draw_string(JP_FONT, Vector2(36, 662), "装備中：%s" % str(shield["name"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("f2d092"))
 	draw_string(JP_FONT, Vector2(36, 685), "上限耐性 %d　構え速度 %d　省力化 %d" % [cap_resist, lightness, efficiency], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("d9e5ff"))
 	if needs_rest:
 		draw_string(JP_FONT, Vector2(36, 711), "遠征後のため、眠ると次の出撃が可能になります。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f4c6d7"))
 
+func _draw_equipment() -> void:
+	draw_rect(Rect2(18, 18, 396, 90), Color(0.02, 0.04, 0.10, 0.86), true)
+	draw_string(JP_FONT, Vector2(38, 50), "盾の装備", HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color.WHITE)
+	draw_string(JP_FONT, Vector2(38, 78), "所持している盾を選んで装備します。", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("c9daf5"))
+	draw_string(JP_FONT, Vector2(38, 100), "変更は、眠ったときに保存されます。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f2d092"))
+	draw_rect(Rect2(18, 354, 396, 300), Color(0.02, 0.04, 0.10, 0.84), true)
+	for index in range(owned_shields.size()):
+		var shield := _shield_data(str(owned_shields[index]))
+		var equipped := str(owned_shields[index]) == equipped_shield
+		var label := "%s　%s" % [str(shield["name"]), _shield_stats_text(shield)]
+		if equipped:
+			label += "　【装備中】"
+		_button(Rect2(24, 370 + index * 39, 384, 35), label, Color("6d547d") if equipped else Color("536f7b"))
+	_button(Rect2(24, 670, 384, 42), "戻る", Color("3e4a61"))
+
 func _draw_armorer() -> void:
 	draw_rect(Rect2(18, 18, 396, 90), Color(0.02, 0.04, 0.10, 0.84), true)
 	draw_string(JP_FONT, Vector2(38, 49), "夜の防具屋", HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color.WHITE)
 	draw_string(JP_FONT, Vector2(38, 76), "鉱石 %d　　素材から盾を作る" % ore, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("f2d092"))
 	draw_string(JP_FONT, Vector2(38, 99), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("d9e5ff"))
-	draw_rect(Rect2(18, 408, 396, 246), Color(0.02, 0.04, 0.10, 0.84), true)
-	draw_string(JP_FONT, Vector2(38, 432), "作成した盾は、選ぶと装備を切り替えられます。", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("c9daf5"))
+	draw_rect(Rect2(18, 346, 396, 318), Color(0.02, 0.04, 0.10, 0.84), true)
+	draw_string(JP_FONT, Vector2(38, 369), "性能を確認して、素材から盾を作る。装備は自室で。", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("c9daf5"))
 	for index in range(1, SHIELDS.size()):
 		var shield: Dictionary = SHIELDS[index]
 		var id := str(shield["id"])
 		var owned := owned_shields.has(id)
-		var equipped := equipped_shield == id
-		var label := "%s　鉱石 %d　%s" % [str(shield["name"]), int(shield["cost"]), str(shield["note"])]
-		if equipped:
-			label = "%s　【装備中】" % str(shield["name"])
-		elif owned:
-			label = "%s　【装備する】" % str(shield["name"])
-		var color := Color("7b5c43") if not owned else Color("536f7b")
-		if equipped:
-			color = Color("6d547d")
-		_button(Rect2(28, 440 + (index - 1) * 66, 376, 56), label, color)
-	_button(Rect2(28, 664, 376, 48), "自室へ戻る", Color("3e4a61"))
+		var rect := Rect2(24, 378 + (index - 1) * 47, 384, 43)
+		var color := Color("785a45") if not owned else Color("435562")
+		draw_rect(rect, color, true)
+		draw_rect(rect, Color("b7d6ec"), false, 1.0)
+		var status := "所持済み" if owned else "鉱石 %d" % int(shield["cost"])
+		draw_string(JP_FONT, Vector2(34, rect.position.y + 17), "%s　%s" % [str(shield["name"]), status], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color.WHITE)
+		draw_string(JP_FONT, Vector2(34, rect.position.y + 34), _shield_stats_text(shield), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("d9e5ff"))
+	_button(Rect2(24, 674, 384, 42), "自室へ戻る", Color("3e4a61"))
 
 func _draw_battle() -> void:
 	if flash > 0.0:
@@ -592,6 +654,16 @@ func _draw_hud() -> void:
 		draw_string(JP_FONT, Vector2(29, 712), "帰還魔法の準備完了", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("f0bbff"))
 	elif not recall_ready:
 		draw_string(JP_FONT, Vector2(29, 712), "帰還準備：防御 %d / 4 回" % blocks, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("d6c8ed"))
+
+func _draw_dialog() -> void:
+	draw_rect(Rect2(0, 0, W, H), Color(0.01, 0.02, 0.06, 0.68), true)
+	draw_rect(Rect2(28, 244, 376, 250), Color("14233a"), true)
+	draw_rect(Rect2(28, 244, 376, 250), Color("b7d6ec"), false, 2.0)
+	draw_string(JP_FONT, Vector2(56, 292), dialog_title, HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color.WHITE)
+	var body_lines := dialog_body.split("\n")
+	for index in range(body_lines.size()):
+		draw_string(JP_FONT, Vector2(56, 334 + index * 27), str(body_lines[index]), HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("d9e5ff"))
+	draw_string(JP_FONT, Vector2(56, 460), "タップして閉じる", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f2d092"))
 
 func _button(rect: Rect2, label: String, color: Color) -> void:
 	draw_rect(rect, color, true)
