@@ -73,6 +73,8 @@ var exhausted_time := 0.0
 var raising_time := 0.0
 var raise_total := 0.0
 var shield_lift := 0.0
+var shield_drop_speed := 0.0
+var shield_ground_impact := 0.0
 var held := false
 var guarding := false
 var attack_active := false
@@ -212,6 +214,7 @@ func _process_expedition(delta: float) -> void:
 	battle_clock += delta
 	princess_cast_clock += delta
 	princess_impact_time = maxf(0.0, princess_impact_time - delta)
+	shield_ground_impact = maxf(0.0, shield_ground_impact - delta)
 	if princess_cast_clock >= PRINCESS_CAST_PERIOD:
 		princess_cast_clock -= PRINCESS_CAST_PERIOD
 		_princess_magic_hit()
@@ -229,11 +232,11 @@ func _process_expedition(delta: float) -> void:
 	elif mode == Mode.DOWNED:
 		guarding = false
 		held = false
-		shield_lift = maxf(0.0, shield_lift - delta * 7.0)
+		_drop_shield(delta)
 	elif exhausted_time > 0.0:
 		exhausted_time -= delta
 		guarding = false
-		shield_lift = maxf(0.0, shield_lift - delta * 7.0)
+		_drop_shield(delta)
 		message = "息切れ中 — 盾を上げられない"
 		if exhausted_time <= 0.0:
 			stamina = maxf(stamina, cap * 0.52)
@@ -256,12 +259,16 @@ func _princess_magic_hit() -> void:
 func _update_guard(delta: float) -> void:
 	if held and not guarding:
 		raising_time -= delta
-		shield_lift = clampf(1.0 - raising_time / maxf(raise_total, 0.001), 0.0, 1.0)
+		# A quick heave: it rises rapidly after the initial effort, then settles into guard.
+		var lift_progress := clampf(1.0 - raising_time / maxf(raise_total, 0.001), 0.0, 1.0)
+		shield_lift = ease(lift_progress, -2.4)
+		shield_drop_speed = 0.0
+		shield_ground_impact = 0.0
 		if raising_time <= 0.0:
 			guarding = true
 	elif not held:
 		guarding = false
-		shield_lift = maxf(0.0, shield_lift - delta * 8.0)
+		_drop_shield(delta)
 	if guarding:
 		shield_lift = 1.0
 		stamina = maxf(0.0, stamina - 17.0 * (1.0 - efficiency * 0.09) * delta)
@@ -271,6 +278,20 @@ func _update_guard(delta: float) -> void:
 			exhausted_time = 2.0
 	else:
 		stamina = minf(cap, stamina + 24.0 * delta)
+
+func _drop_shield(delta: float) -> void:
+	# Let the weight take over after releasing the hold: a short, accelerating fall.
+	if shield_lift <= 0.0:
+		shield_lift = 0.0
+		shield_drop_speed = 0.0
+		return
+	shield_drop_speed += 7.8 * delta
+	shield_lift -= shield_drop_speed * delta
+	if shield_lift <= 0.0:
+		shield_lift = 0.0
+		shield_drop_speed = 0.0
+		shield_ground_impact = 0.20
+		_play_sound(74.0, 0.16, 0.18, -0.08)
 
 func _process_attack(delta: float) -> void:
 	if attack_active:
@@ -350,6 +371,8 @@ func _start_expedition() -> void:
 	exhausted_time = 0.0
 	raise_total = 0.0
 	shield_lift = 0.0
+	shield_drop_speed = 0.0
+	shield_ground_impact = 0.0
 	battle_clock = 0.0
 	princess_cast_clock = 0.0
 	princess_impact_time = 0.0
@@ -549,6 +572,8 @@ func _input(event: InputEvent) -> void:
 		return
 	if mode in [Mode.BATTLE, Mode.RECALL] and exhausted_time <= 0.0:
 		held = true
+		shield_drop_speed = 0.0
+		shield_ground_impact = 0.0
 		var shield_weight := float(_shield_data(equipped_shield)["weight"])
 		# Weight tiers 1/2/3 map to practical timing factors 1.0/1.25/1.5.
 		var weight_factor := 1.0 + (shield_weight - 1.0) * 0.25
@@ -775,9 +800,13 @@ func _draw_battle() -> void:
 		var radius := _rock_radius(attack_t)
 		draw_circle(tip + Vector2(radius * 0.24, radius * 0.34), radius * 1.16, Color(0.01, 0.02, 0.04, 0.48))
 		draw_colored_polygon(PackedVector2Array([tip - direction * radius, tip + wing * radius * 0.82, tip + direction * radius, tip - wing * radius * 0.82]), Color("555a72"))
-	# The shield is always visible: it rests by the guardian's feet and rises while held.
-	var shield_pos := SHIELD_FOOT.lerp(SHIELD, shield_lift)
-	var shield_radius := lerpf(42.0, 68.0, shield_lift)
+	# The shield is always visible. A lift follows a small forward arc; release lets it fall under gravity.
+	var lift_progress := clampf(1.0 - raising_time / maxf(raise_total, 0.001), 0.0, 1.0) if held and not guarding else shield_lift
+	var lift_arc := -sin(lift_progress * PI) * 18.0 if held and not guarding else 0.0
+	var shield_pos := SHIELD_FOOT.lerp(SHIELD, shield_lift) + Vector2(lift_arc, 0.0)
+	var impact_ratio := shield_ground_impact / 0.20
+	shield_pos.y += impact_ratio * 8.0
+	var shield_radius := lerpf(42.0, 68.0, shield_lift) * (1.0 - impact_ratio * 0.12)
 	draw_circle(shield_pos + Vector2(5, 8), shield_radius, Color(0.01, 0.02, 0.05, 0.42))
 	draw_circle(shield_pos, shield_radius, Color("355d8d"))
 	draw_arc(shield_pos, shield_radius, 0.0, TAU, 28, Color("9ed6ea"), 3.0, true)
