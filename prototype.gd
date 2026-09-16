@@ -35,22 +35,18 @@ var pending_xp := 0.0
 var ore := 0
 var base_cap := 100.0
 var cap_resist := 0
-var lightness := 0
 var efficiency := 0
 var owned_shields: Array = ["traveler"]
 var equipped_shield := "traveler"
 
 const SHIELDS := [
-	{"id": "traveler", "name": "旅人の盾", "cost": 0, "resist": 0, "light": 0, "efficient": 0, "note": "使い込まれた最初の盾"},
-	{"id": "moon_iron", "name": "月鉄の丸盾", "cost": 3, "resist": 1, "light": 0, "efficient": 0, "note": "最大腕力が削られにくい"},
-	{"id": "wind_crest", "name": "風紋の盾", "cost": 3, "resist": 0, "light": 1, "efficient": 0, "note": "盾を素早く構えられる"},
-	{"id": "black_leather", "name": "黒革の大盾", "cost": 4, "resist": 0, "light": 0, "efficient": 1, "note": "構えている間の消耗が少ない"},
-	{"id": "moon_iron_2", "name": "月鉄の大円盾", "cost": 6, "resist": 2, "light": 0, "efficient": 0, "note": "上限耐性に特化したLv.2盾"},
-	{"id": "wind_crest_2", "name": "風紋の小盾", "cost": 6, "resist": 0, "light": 2, "efficient": 0, "note": "構え速度に特化したLv.2盾"},
-	{"id": "black_leather_2", "name": "黒革の塔盾", "cost": 8, "resist": 0, "light": 0, "efficient": 2, "note": "省力化に特化したLv.2盾"},
-	{"id": "moon_iron_3", "name": "月鉄の城壁盾", "cost": 9, "resist": 3, "light": 0, "efficient": 0, "note": "上限耐性に特化したLv.3盾"},
-	{"id": "wind_crest_3", "name": "風紋の翼盾", "cost": 9, "resist": 0, "light": 3, "efficient": 0, "note": "構え速度に特化したLv.3盾"},
-	{"id": "black_leather_3", "name": "黒革の城砦盾", "cost": 12, "resist": 0, "light": 0, "efficient": 3, "note": "省力化に特化したLv.3盾"},
+	{"id": "traveler", "name": "旅人の盾", "cost": 0, "weight": 1, "resist": 0, "efficient": 0, "note": "使い込まれた最初の盾"},
+	{"id": "moon_iron", "name": "月鉄の丸盾", "cost": 3, "weight": 1, "resist": 1, "efficient": 0, "note": "最大腕力が削られにくいLv.1盾"},
+	{"id": "black_leather", "name": "黒革の大盾", "cost": 4, "weight": 1, "resist": 0, "efficient": 1, "note": "構えている間の消耗が少ないLv.1盾"},
+	{"id": "moon_iron_2", "name": "月鉄の大円盾", "cost": 6, "weight": 2, "resist": 2, "efficient": 0, "note": "上限耐性に特化したLv.2盾"},
+	{"id": "black_leather_2", "name": "黒革の塔盾", "cost": 8, "weight": 2, "resist": 0, "efficient": 2, "note": "省力化に特化したLv.2盾"},
+	{"id": "moon_iron_3", "name": "月鉄の城壁盾", "cost": 9, "weight": 3, "resist": 3, "efficient": 0, "note": "上限耐性に特化したLv.3盾"},
+	{"id": "black_leather_3", "name": "黒革の城砦盾", "cost": 12, "weight": 3, "resist": 0, "efficient": 3, "note": "省力化に特化したLv.3盾"},
 ]
 
 const COLLECTION_PER_PAGE := 5
@@ -147,11 +143,15 @@ func _apply_save(data: Dictionary) -> void:
 	pending_xp = float(data.get("pending_xp", 0.0))
 	ore = int(data.get("ore", 0))
 	base_cap = float(data.get("base_cap", 100.0))
-	owned_shields = data.get("owned_shields", ["traveler"])
-	if not owned_shields is Array or owned_shields.is_empty():
-		owned_shields = ["traveler"]
+	var saved_shields = data.get("owned_shields", ["traveler"])
+	owned_shields = ["traveler"]
+	if saved_shields is Array:
+		for shield_id in saved_shields:
+			var id := str(shield_id)
+			if id != "traveler" and _shield_exists(id):
+				owned_shields.append(id)
 	equipped_shield = str(data.get("equipped_shield", "traveler"))
-	if not owned_shields.has(equipped_shield):
+	if not owned_shields.has(equipped_shield) or not _shield_exists(equipped_shield):
 		equipped_shield = "traveler"
 	_apply_shield_effects()
 	needs_rest = bool(data.get("needs_rest", false))
@@ -366,14 +366,19 @@ func _shield_data(id: String) -> Dictionary:
 			return shield
 	return SHIELDS[0]
 
+func _shield_exists(id: String) -> bool:
+	for shield in SHIELDS:
+		if str(shield["id"]) == id:
+			return true
+	return false
+
 func _apply_shield_effects() -> void:
 	var shield := _shield_data(equipped_shield)
 	cap_resist = int(shield["resist"])
-	lightness = int(shield["light"])
 	efficiency = int(shield["efficient"])
 
 func _shield_stats_text(shield: Dictionary) -> String:
-	return "上限耐性 +%d　構え速度 +%d　省力化 +%d" % [int(shield["resist"]), int(shield["light"]), int(shield["efficient"])]
+	return "重さ %d　上限耐性 +%d　省力化 +%d" % [int(shield["weight"]), int(shield["resist"]), int(shield["efficient"])]
 
 func _page_count(item_count: int) -> int:
 	return maxi(1, int(ceil(float(item_count) / float(COLLECTION_PER_PAGE))))
@@ -507,7 +512,8 @@ func _input(event: InputEvent) -> void:
 		return
 	if mode in [Mode.BATTLE, Mode.RECALL] and exhausted_time <= 0.0:
 		held = true
-		raising_time = maxf(0.08, 0.18 + (1.0 - cap / base_cap) * 0.52 - lightness * 0.035)
+		var shield_weight := float(_shield_data(equipped_shield)["weight"])
+		raising_time = maxf(0.08, 0.18 + (1.0 - cap / base_cap) * 0.52) * shield_weight
 
 func _rock_pos(t: float) -> Vector2:
 	var depth := lerpf(7.0, 1.0, t)
@@ -612,7 +618,7 @@ func _draw_home() -> void:
 	_button(Rect2(288, 575, 124, 58), "防具屋へ", Color("785a45"))
 	var shield := _shield_data(equipped_shield)
 	draw_string(JP_FONT, Vector2(36, 662), "装備中：%s" % str(shield["name"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("f2d092"))
-	draw_string(JP_FONT, Vector2(36, 685), "上限耐性 %d　構え速度 %d　省力化 %d" % [cap_resist, lightness, efficiency], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("d9e5ff"))
+	draw_string(JP_FONT, Vector2(36, 685), _shield_stats_text(shield), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("d9e5ff"))
 	if needs_rest:
 		draw_string(JP_FONT, Vector2(36, 711), "遠征後のため、眠ると次の出撃が可能になります。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f4c6d7"))
 
