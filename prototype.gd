@@ -280,12 +280,12 @@ func _resolve_attack() -> void:
 		_damage_princess(2 if attack_kind == "heavy" else 1)
 
 func _block() -> void:
-	var base_cost := 9.0 if attack_kind == "stone" else (6.0 if attack_kind == "volley" else 23.0)
-	var cap_cost := base_cost * (1.0 - cap_resist * 0.10)
+	var attack_power := 9.0 if attack_kind == "stone" else (6.0 if attack_kind == "volley" else 23.0)
+	var cap_cost := attack_power * (1.0 - cap_resist * 0.10)
 	stamina = maxf(0.0, stamina - cap_cost * 0.72)
 	cap = maxf(0.0, cap - cap_cost)
-	# Training rewards successful defenses, independently of how much the shield's cap was reduced.
-	run_xp += 1.0
+	# Training follows the enemy's original attack power, not the shield's mitigated damage.
+	run_xp += attack_power
 	blocks += 1
 	if blocks % 2 == 0:
 		run_ore += 1
@@ -294,7 +294,7 @@ func _block() -> void:
 	flash = 0.18
 	# A bright, short shield clang contrasts with the dull damage sound.
 	_play_sound(165.0 if attack_kind == "heavy" else 235.0, 0.14, 0.13, -0.12)
-	message = "防御 %d回   鍛錬 +%d" % [blocks, int(run_xp)]
+	message = "防御 %d回　経験値 +%d（累計 %d）" % [blocks, int(attack_power), int(run_xp)]
 	if cap <= 0.0:
 		mode = Mode.DOWNED
 		message = "腕が限界だ — 王女が一人で戦う"
