@@ -10,6 +10,7 @@ const CX := 216.0
 const HY := 300.0
 const FOCAL := 250.0
 const SHIELD := Vector2(125, 568)
+const SHIELD_FOOT := Vector2(125, 662)
 const ROCK_START_HEIGHT := 3.95
 const ROCK_END_HEIGHT := -1.05
 const ROCK_GRAVITY := 8.0
@@ -64,6 +65,8 @@ var recall_ready := false
 var recall_time := 0.0
 var exhausted_time := 0.0
 var raising_time := 0.0
+var raise_total := 0.0
+var shield_lift := 0.0
 var held := false
 var guarding := false
 var attack_active := false
@@ -213,9 +216,11 @@ func _process_expedition(delta: float) -> void:
 	elif mode == Mode.DOWNED:
 		guarding = false
 		held = false
+		shield_lift = maxf(0.0, shield_lift - delta * 7.0)
 	elif exhausted_time > 0.0:
 		exhausted_time -= delta
 		guarding = false
+		shield_lift = maxf(0.0, shield_lift - delta * 7.0)
 		message = "息切れ中 — 盾を上げられない"
 		if exhausted_time <= 0.0:
 			stamina = maxf(stamina, cap * 0.52)
@@ -227,11 +232,14 @@ func _process_expedition(delta: float) -> void:
 func _update_guard(delta: float) -> void:
 	if held and not guarding:
 		raising_time -= delta
+		shield_lift = clampf(1.0 - raising_time / maxf(raise_total, 0.001), 0.0, 1.0)
 		if raising_time <= 0.0:
 			guarding = true
 	elif not held:
 		guarding = false
+		shield_lift = maxf(0.0, shield_lift - delta * 8.0)
 	if guarding:
+		shield_lift = 1.0
 		stamina = maxf(0.0, stamina - 17.0 * (1.0 - efficiency * 0.09) * delta)
 		if stamina <= 0.0:
 			guarding = false
@@ -316,6 +324,8 @@ func _start_expedition() -> void:
 	recall_ready = false
 	recall_time = 0.0
 	exhausted_time = 0.0
+	raise_total = 0.0
+	shield_lift = 0.0
 	attack_active = false
 	attack_wait = 1.0
 	attack_index = 0
@@ -513,7 +523,8 @@ func _input(event: InputEvent) -> void:
 	if mode in [Mode.BATTLE, Mode.RECALL] and exhausted_time <= 0.0:
 		held = true
 		var shield_weight := float(_shield_data(equipped_shield)["weight"])
-		raising_time = maxf(0.08, 0.18 + (1.0 - cap / base_cap) * 0.52) * shield_weight
+		raise_total = maxf(0.08, 0.18 + (1.0 - cap / base_cap) * 0.52) * shield_weight
+		raising_time = raise_total
 
 func _rock_pos(t: float) -> Vector2:
 	var depth := lerpf(7.0, 1.0, t)
@@ -684,10 +695,19 @@ func _draw_battle() -> void:
 		var radius := _rock_radius(attack_t)
 		draw_circle(tip + Vector2(radius * 0.24, radius * 0.34), radius * 1.16, Color(0.01, 0.02, 0.04, 0.48))
 		draw_colored_polygon(PackedVector2Array([tip - direction * radius, tip + wing * radius * 0.82, tip + direction * radius, tip - wing * radius * 0.82]), Color("555a72"))
+	# The shield is always visible: it rests by the guardian's feet and rises while held.
+	var shield_pos := SHIELD_FOOT.lerp(SHIELD, shield_lift)
+	var shield_radius := lerpf(42.0, 68.0, shield_lift)
+	draw_circle(shield_pos + Vector2(5, 8), shield_radius, Color(0.01, 0.02, 0.05, 0.42))
+	draw_circle(shield_pos, shield_radius, Color("355d8d"))
+	draw_arc(shield_pos, shield_radius, 0.0, TAU, 28, Color("9ed6ea"), 3.0, true)
+	draw_arc(shield_pos, shield_radius * 0.65, PI * 0.12, PI * 0.88, 16, Color("6f9fcc"), 3.0, true)
 	if guarding:
-		draw_circle(SHIELD, 68, Color(0.25, 0.75, 1.0, 0.27))
-		draw_arc(SHIELD, 71, PI, TAU, 28, Color("d9f5ff"), 7)
-	elif mode == Mode.DOWNED:
+		draw_circle(shield_pos, shield_radius + 8, Color(0.25, 0.75, 1.0, 0.20))
+		draw_arc(shield_pos, shield_radius + 8, PI, TAU, 28, Color("d9f5ff"), 6)
+	elif held and shield_lift > 0.0:
+		draw_string(JP_FONT, shield_pos + Vector2(-39, -shield_radius - 12), "持ち上げ中", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("d9f5ff"))
+	if mode == Mode.DOWNED:
 		draw_circle(SHIELD + Vector2(0, 32), 30, Color(0.01, 0.02, 0.05, 0.62))
 		draw_string(JP_FONT, Vector2(58, 568), "力尽きた", HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color("f2a5c7"))
 	_draw_hud()
