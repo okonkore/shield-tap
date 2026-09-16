@@ -284,7 +284,8 @@ func _block() -> void:
 	var cap_cost := base_cost * (1.0 - cap_resist * 0.10)
 	stamina = maxf(0.0, stamina - cap_cost * 0.72)
 	cap = maxf(0.0, cap - cap_cost)
-	run_xp += cap_cost
+	# Training rewards successful defenses, independently of how much the shield's cap was reduced.
+	run_xp += 1.0
 	blocks += 1
 	if blocks % 2 == 0:
 		run_ore += 1
