@@ -17,6 +17,8 @@ const ROCK_START_HEIGHT := 3.95
 const ROCK_END_HEIGHT := -1.05
 const ROCK_GRAVITY := 8.0
 const ORE_DAMAGE_STEP := 14.0
+const PRINCESS_CAST_PERIOD := 3.0
+const PRINCESS_CHANT_RATIO := 0.48
 
 enum Mode { TITLE, HOME, ARMORER, BATTLE, RECALL, DOWNED }
 enum TitlePanel { MAIN, CONTINUE, NEW_GAME }
@@ -81,6 +83,8 @@ var attack_wait := 1.0
 var attack_index := 0
 var flash := 0.0
 var battle_clock := 0.0
+var princess_cast_clock := 0.0
+var princess_impact_time := 0.0
 var message := "出撃してゴーレムに挑もう"
 var dialog_visible := false
 var dialog_title := ""
@@ -206,14 +210,11 @@ func _new_game(slot: int) -> void:
 
 func _process_expedition(delta: float) -> void:
 	battle_clock += delta
-	# The princess's mining magic both damages the golem and exposes fragments of its ore body.
-	var magic_damage := (3.45 + arm_level * 0.22) * delta
-	boss_hp = maxf(0.0, boss_hp - magic_damage)
-	mined_damage += magic_damage
-	var newly_mined := int(floor(mined_damage / ORE_DAMAGE_STEP))
-	if newly_mined > 0:
-		run_ore += newly_mined
-		mined_damage = fmod(mined_damage, ORE_DAMAGE_STEP)
+	princess_cast_clock += delta
+	princess_impact_time = maxf(0.0, princess_impact_time - delta)
+	if princess_cast_clock >= PRINCESS_CAST_PERIOD:
+		princess_cast_clock -= PRINCESS_CAST_PERIOD
+		_princess_magic_hit()
 	if boss_hp <= 0.0:
 		_finish(true, "ゴーレムを鎮めた")
 		return
@@ -240,6 +241,17 @@ func _process_expedition(delta: float) -> void:
 	else:
 		_update_guard(delta)
 	_process_attack(delta)
+
+func _princess_magic_hit() -> void:
+	# A full chant culminates in one deliberate mining strike rather than continuous damage.
+	var magic_damage := 10.35 + arm_level * 0.66
+	boss_hp = maxf(0.0, boss_hp - magic_damage)
+	mined_damage += magic_damage
+	var newly_mined := int(floor(mined_damage / ORE_DAMAGE_STEP))
+	if newly_mined > 0:
+		run_ore += newly_mined
+		mined_damage = fmod(mined_damage, ORE_DAMAGE_STEP)
+	princess_impact_time = 0.32
 
 func _update_guard(delta: float) -> void:
 	if held and not guarding:
@@ -339,6 +351,8 @@ func _start_expedition() -> void:
 	raise_total = 0.0
 	shield_lift = 0.0
 	battle_clock = 0.0
+	princess_cast_clock = 0.0
+	princess_impact_time = 0.0
 	attack_active = false
 	attack_wait = 1.0
 	attack_index = 0
@@ -696,27 +710,37 @@ func _draw_armorer() -> void:
 	_button(Rect2(24, 674, 384, 42), "自室へ戻る", Color("3e4a61"))
 
 func _draw_princess_attack() -> void:
-	# A repeating arcing spell shot makes the princess's continuous damage visible.
-	var shot_t := fmod(battle_clock, 0.92) / 0.92
-	var trail := PackedVector2Array()
-	for index in range(18):
-		var t := shot_t * float(index) / 17.0
-		var point := PRINCESS_CAST.lerp(GOLEM_TARGET, t)
-		point.y -= sin(PI * t) * 58.0
-		trail.append(point)
-	draw_polyline(trail, Color(0.74, 0.48, 1.0, 0.28), 2.0, true)
-	var orb := PRINCESS_CAST.lerp(GOLEM_TARGET, shot_t)
-	orb.y -= sin(PI * shot_t) * 58.0
-	draw_circle(orb, 15.0, Color(0.60, 0.26, 0.95, 0.16))
-	draw_circle(orb, 8.0, Color(0.77, 0.54, 1.0, 0.72))
-	draw_circle(orb, 3.0, Color("f4e5ff"))
-	if shot_t > 0.84:
-		var impact_alpha := (shot_t - 0.84) / 0.16
-		draw_circle(GOLEM_TARGET, 11.0 + impact_alpha * 14.0, Color(0.64, 0.42, 1.0, 0.24 * (1.0 - impact_alpha)))
-		draw_circle(GOLEM_TARGET, 4.0, Color("e9d4ff"))
-	if shot_t < 0.22:
-		var cast_radius := 17.0 + sin(shot_t / 0.22 * PI) * 10.0
-		draw_arc(PRINCESS_CAST, cast_radius, 0.0, TAU, 18, Color(0.78, 0.53, 1.0, 0.45), 2.0, true)
+	var cycle_t := princess_cast_clock / PRINCESS_CAST_PERIOD
+	if cycle_t < PRINCESS_CHANT_RATIO:
+		var chant_t := cycle_t / PRINCESS_CHANT_RATIO
+		var cast_radius := 22.0 + chant_t * 33.0
+		var spin := battle_clock * 4.0
+		draw_circle(PRINCESS_CAST, cast_radius, Color(0.58, 0.25, 0.96, 0.06 + chant_t * 0.10))
+		draw_arc(PRINCESS_CAST, cast_radius, spin, spin + TAU * 0.76, 28, Color(0.78, 0.53, 1.0, 0.62), 2.0, true)
+		draw_arc(PRINCESS_CAST, cast_radius * 0.58, -spin * 1.4, -spin * 1.4 + TAU * 0.62, 22, Color(0.64, 0.82, 1.0, 0.55), 2.0, true)
+		for index in range(5):
+			var angle := spin + TAU * float(index) / 5.0
+			var spark := PRINCESS_CAST + Vector2(cos(angle), sin(angle)) * cast_radius * 0.72
+			draw_circle(spark, 2.0 + chant_t * 2.0, Color("ead7ff"))
+		draw_string(JP_FONT, PRINCESS_CAST + Vector2(-31, -cast_radius - 14), "詠唱中", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("efd9ff"))
+	else:
+		var shot_t := (cycle_t - PRINCESS_CHANT_RATIO) / (1.0 - PRINCESS_CHANT_RATIO)
+		var trail := PackedVector2Array()
+		for index in range(18):
+			var t := shot_t * float(index) / 17.0
+			var point := PRINCESS_CAST.lerp(GOLEM_TARGET, t)
+			point.y -= sin(PI * t) * 58.0
+			trail.append(point)
+		draw_polyline(trail, Color(0.74, 0.48, 1.0, 0.34), 2.0, true)
+		var orb := PRINCESS_CAST.lerp(GOLEM_TARGET, shot_t)
+		orb.y -= sin(PI * shot_t) * 58.0
+		draw_circle(orb, 17.0, Color(0.60, 0.26, 0.95, 0.18))
+		draw_circle(orb, 9.0, Color(0.77, 0.54, 1.0, 0.78))
+		draw_circle(orb, 3.0, Color("f4e5ff"))
+	if princess_impact_time > 0.0:
+		var impact_t := princess_impact_time / 0.32
+		draw_circle(GOLEM_TARGET, 14.0 + (1.0 - impact_t) * 22.0, Color(0.64, 0.42, 1.0, 0.34 * impact_t))
+		draw_circle(GOLEM_TARGET, 5.0, Color("e9d4ff"))
 
 func _draw_recall_effect() -> void:
 	if mode != Mode.RECALL:
