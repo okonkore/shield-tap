@@ -4,6 +4,7 @@ const W := 432.0
 const H := 768.0
 const ART = preload("res://assets/shield-tap-golem-diagonal-keyart-v3.png")
 const HOME_ART = preload("res://assets/shield-tap-home-interior-v1.png")
+const ARMORER_ART = preload("res://assets/shield-tap-armorer-interior-night-v1.png")
 const JP_FONT = preload("res://assets/fonts/NotoSansJP-VF.ttf")
 const CX := 216.0
 const HY := 300.0
@@ -13,7 +14,7 @@ const ROCK_START_HEIGHT := 3.95
 const ROCK_END_HEIGHT := -1.05
 const ROCK_GRAVITY := 8.0
 
-enum Mode { TITLE, HOME, BATTLE, RECALL, DOWNED }
+enum Mode { TITLE, HOME, ARMORER, BATTLE, RECALL, DOWNED }
 enum TitlePanel { MAIN, CONTINUE, NEW_GAME }
 const SAVE_KEY_PREFIX := "shield-tap-save-v2-"
 const SAVE_SLOT_COUNT := 3
@@ -32,6 +33,15 @@ var base_cap := 100.0
 var cap_resist := 0
 var lightness := 0
 var efficiency := 0
+var owned_shields: Array = ["traveler"]
+var equipped_shield := "traveler"
+
+const SHIELDS := [
+	{"id": "traveler", "name": "旅人の盾", "cost": 0, "resist": 0, "light": 0, "efficient": 0, "note": "使い込まれた最初の盾"},
+	{"id": "moon_iron", "name": "月鉄の丸盾", "cost": 3, "resist": 1, "light": 0, "efficient": 0, "note": "最大腕力が削られにくい"},
+	{"id": "wind_crest", "name": "風紋の盾", "cost": 3, "resist": 0, "light": 1, "efficient": 0, "note": "盾を素早く構えられる"},
+	{"id": "black_leather", "name": "黒革の大盾", "cost": 4, "resist": 0, "light": 0, "efficient": 1, "note": "構えている間の消耗が少ない"},
+]
 
 # Expedition state. Boss health is reset on every departure.
 var cap := 100.0
@@ -120,9 +130,13 @@ func _apply_save(data: Dictionary) -> void:
 	pending_xp = float(data.get("pending_xp", 0.0))
 	ore = int(data.get("ore", 0))
 	base_cap = float(data.get("base_cap", 100.0))
-	cap_resist = int(data.get("cap_resist", 0))
-	lightness = int(data.get("lightness", 0))
-	efficiency = int(data.get("efficiency", 0))
+	owned_shields = data.get("owned_shields", ["traveler"])
+	if not owned_shields is Array or owned_shields.is_empty():
+		owned_shields = ["traveler"]
+	equipped_shield = str(data.get("equipped_shield", "traveler"))
+	if not owned_shields.has(equipped_shield):
+		equipped_shield = "traveler"
+	_apply_shield_effects()
 	needs_rest = bool(data.get("needs_rest", false))
 
 func _continue_game(slot: int) -> void:
@@ -140,8 +154,8 @@ func _save_progress() -> void:
 		return
 	var data := {
 		"arm_level": arm_level, "level_xp": level_xp, "pending_xp": pending_xp,
-		"ore": ore, "base_cap": base_cap, "cap_resist": cap_resist,
-		"lightness": lightness, "efficiency": efficiency, "needs_rest": needs_rest,
+		"ore": ore, "base_cap": base_cap, "owned_shields": owned_shields,
+		"equipped_shield": equipped_shield, "needs_rest": needs_rest,
 	}
 	if selected_slot < save_slots.size():
 		save_slots[selected_slot] = data
@@ -157,9 +171,9 @@ func _new_game(slot: int) -> void:
 	pending_xp = 0.0
 	ore = 0
 	base_cap = 100.0
-	cap_resist = 0
-	lightness = 0
-	efficiency = 0
+	owned_shields = ["traveler"]
+	equipped_shield = "traveler"
+	_apply_shield_effects()
 	needs_rest = false
 	message = "出撃してゴーレムに挑もう"
 	mode = Mode.HOME
@@ -322,21 +336,34 @@ func _sleep() -> void:
 func _need_xp() -> float:
 	return 70.0 + arm_level * 55.0
 
-func _upgrade(kind: String) -> void:
-	var cost := 3 + cap_resist + lightness + efficiency
+func _shield_data(id: String) -> Dictionary:
+	for shield in SHIELDS:
+		if str(shield["id"]) == id:
+			return shield
+	return SHIELDS[0]
+
+func _apply_shield_effects() -> void:
+	var shield := _shield_data(equipped_shield)
+	cap_resist = int(shield["resist"])
+	lightness = int(shield["light"])
+	efficiency = int(shield["efficient"])
+
+func _craft_or_equip(id: String) -> void:
+	var shield := _shield_data(id)
+	if owned_shields.has(id):
+		equipped_shield = id
+		_apply_shield_effects()
+		message = "%sを装備した" % str(shield["name"])
+		return
+	var cost := int(shield["cost"])
 	if ore < cost:
 		message = "鉱石が%d個必要" % cost
 		return
 	ore -= cost
-	if kind == "resist":
-		cap_resist += 1
-		message = "盾を補強した"
-	elif kind == "light":
-		lightness += 1
-		message = "盾を軽量化した"
-	else:
-		efficiency += 1
-		message = "盾の内張りを改良した"
+	owned_shields.append(id)
+	equipped_shield = id
+	_apply_shield_effects()
+	message = "%sを作成して装備した" % str(shield["name"])
 
 func _input(event: InputEvent) -> void:
 	var pressed := false
@@ -379,14 +406,19 @@ func _input(event: InputEvent) -> void:
 	if mode == Mode.HOME:
 		if Rect2(40, 505, 352, 58).has_point(pos):
 			_start_expedition()
-		elif Rect2(20, 575, 96, 58).has_point(pos):
+		elif Rect2(20, 575, 185, 58).has_point(pos):
 			_sleep()
-		elif Rect2(122, 575, 96, 58).has_point(pos):
-			_upgrade("resist")
-		elif Rect2(224, 575, 96, 58).has_point(pos):
-			_upgrade("light")
-		elif Rect2(326, 575, 86, 58).has_point(pos):
-			_upgrade("efficient")
+		elif Rect2(227, 575, 185, 58).has_point(pos):
+			mode = Mode.ARMORER
+			message = "鉱石を使って新しい盾を作ろう"
+		return
+	if mode == Mode.ARMORER:
+		for index in range(1, SHIELDS.size()):
+			if Rect2(28, 440 + (index - 1) * 66, 376, 56).has_point(pos):
+				_craft_or_equip(str(SHIELDS[index]["id"]))
+				return
+		if Rect2(28, 664, 376, 48).has_point(pos):
+			mode = Mode.HOME
 		return
 	if mode == Mode.BATTLE and recall_ready and Rect2(282, 688, 130, 35).has_point(pos):
 		_start_recall()
@@ -432,12 +464,19 @@ func _fill_audio() -> void:
 		audio_playback.push_frame(Vector2(sample, sample))
 
 func _draw() -> void:
-	draw_texture_rect(HOME_ART if mode in [Mode.TITLE, Mode.HOME] else ART, Rect2(0, 0, W, H), false)
+	var background := ART
+	if mode in [Mode.TITLE, Mode.HOME]:
+		background = HOME_ART
+	elif mode == Mode.ARMORER:
+		background = ARMORER_ART
+	draw_texture_rect(background, Rect2(0, 0, W, H), false)
 	draw_rect(Rect2(0, 0, W, H), Color(0.02, 0.04, 0.10, 0.17), true)
 	if mode == Mode.TITLE:
 		_draw_title()
 	elif mode == Mode.HOME:
 		_draw_home()
+	elif mode == Mode.ARMORER:
+		_draw_armorer()
 	else:
 		_draw_battle()
 
@@ -481,13 +520,36 @@ func _draw_home() -> void:
 	draw_string(JP_FONT, Vector2(48, 455), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f2a5c7"))
 	var expedition_color := Color("3a6384") if not needs_rest else Color("293846")
 	_button(Rect2(40, 505, 352, 58), "出撃 — ひび割れゴーレム" if not needs_rest else "眠るまで出撃できない", expedition_color)
-	_button(Rect2(20, 575, 96, 58), "眠る", Color("4d5979"))
-	_button(Rect2(122, 575, 96, 58), "補強", Color("5f556f"))
-	_button(Rect2(224, 575, 96, 58), "軽量化", Color("5f556f"))
-	_button(Rect2(326, 575, 86, 58), "節約", Color("5f556f"))
-	draw_string(JP_FONT, Vector2(36, 662), "盾：上限耐性 %d　構え速度 %d　省力化 %d" % [cap_resist, lightness, efficiency], HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("d9e5ff"))
+	_button(Rect2(20, 575, 185, 58), "眠る（ここで保存）", Color("4d5979"))
+	_button(Rect2(227, 575, 185, 58), "防具屋へ", Color("785a45"))
+	var shield := _shield_data(equipped_shield)
+	draw_string(JP_FONT, Vector2(36, 662), "装備中：%s" % str(shield["name"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("f2d092"))
+	draw_string(JP_FONT, Vector2(36, 685), "上限耐性 %d　構え速度 %d　省力化 %d" % [cap_resist, lightness, efficiency], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("d9e5ff"))
 	if needs_rest:
-		draw_string(JP_FONT, Vector2(36, 688), "遠征後のため、眠ると次の出撃が可能になります。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f4c6d7"))
+		draw_string(JP_FONT, Vector2(36, 711), "遠征後のため、眠ると次の出撃が可能になります。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f4c6d7"))
+
+func _draw_armorer() -> void:
+	draw_rect(Rect2(18, 18, 396, 90), Color(0.02, 0.04, 0.10, 0.84), true)
+	draw_string(JP_FONT, Vector2(38, 49), "夜の防具屋", HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color.WHITE)
+	draw_string(JP_FONT, Vector2(38, 76), "鉱石 %d　　素材から盾を作る" % ore, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("f2d092"))
+	draw_string(JP_FONT, Vector2(38, 99), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("d9e5ff"))
+	draw_rect(Rect2(18, 408, 396, 246), Color(0.02, 0.04, 0.10, 0.84), true)
+	draw_string(JP_FONT, Vector2(38, 432), "作成した盾は、選ぶと装備を切り替えられます。", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("c9daf5"))
+	for index in range(1, SHIELDS.size()):
+		var shield: Dictionary = SHIELDS[index]
+		var id := str(shield["id"])
+		var owned := owned_shields.has(id)
+		var equipped := equipped_shield == id
+		var label := "%s　鉱石 %d　%s" % [str(shield["name"]), int(shield["cost"]), str(shield["note"])]
+		if equipped:
+			label = "%s　【装備中】" % str(shield["name"])
+		elif owned:
+			label = "%s　【装備する】" % str(shield["name"])
+		var color := Color("7b5c43") if not owned else Color("536f7b")
+		if equipped:
+			color = Color("6d547d")
+		_button(Rect2(28, 440 + (index - 1) * 66, 376, 56), label, color)
+	_button(Rect2(28, 664, 376, 48), "自室へ戻る", Color("3e4a61"))
 
 func _draw_battle() -> void:
 	if flash > 0.0:
