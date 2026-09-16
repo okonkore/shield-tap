@@ -528,7 +528,9 @@ func _input(event: InputEvent) -> void:
 	if mode in [Mode.BATTLE, Mode.RECALL] and exhausted_time <= 0.0:
 		held = true
 		var shield_weight := float(_shield_data(equipped_shield)["weight"])
-		raise_total = maxf(0.08, 0.18 + (1.0 - cap / base_cap) * 0.52) * shield_weight
+		# Weight tiers 1/2/3 map to practical timing factors 1.0/1.25/1.5.
+		var weight_factor := 1.0 + (shield_weight - 1.0) * 0.25
+		raise_total = maxf(0.08, 0.18 + (1.0 - cap / base_cap) * 0.52) * weight_factor
 		raising_time = raise_total
 
 func _rock_pos(t: float) -> Vector2:
