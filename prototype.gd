@@ -3,6 +3,7 @@ extends Node2D
 const W := 432.0
 const H := 768.0
 const ART = preload("res://assets/shield-tap-golem-diagonal-keyart-v3.png")
+const FOUR_ARM_ART = preload("res://assets/shield-tap-fourarm-golem-battle-v1.png")
 const HOME_ART = preload("res://assets/shield-tap-home-interior-v1.png")
 const ARMORER_ART = preload("res://assets/shield-tap-armorer-interior-night-v1.png")
 const JP_FONT = preload("res://assets/fonts/NotoSansJP-VF.ttf")
@@ -23,7 +24,7 @@ const RECALL_CHANT_DURATION := 5.2
 
 enum Mode { TITLE, HOME, ARMORER, BATTLE, RECALL, DOWNED }
 enum TitlePanel { MAIN, CONTINUE, NEW_GAME }
-enum HomePanel { MAIN, EQUIPMENT }
+enum HomePanel { MAIN, EQUIPMENT, BOSS_SELECT }
 const SAVE_KEY_PREFIX := "shield-tap-save-v2-"
 const SAVE_SLOT_COUNT := 3
 var mode := Mode.TITLE
@@ -34,6 +35,7 @@ var armorer_page := 0
 var selected_slot := -1
 var save_slots: Array = []
 var needs_rest := false
+var selected_boss := "cracked"
 
 # Persistent progression. Values are deliberately simple for the first playable slice.
 var arm_level := 1
@@ -100,6 +102,18 @@ const PATTERN := [
 	{"kind": "volley", "wait": 0.35}, {"kind": "volley", "wait": 0.35},
 	{"kind": "heavy", "wait": 1.05}, {"kind": "stone", "wait": 0.65},
 	{"kind": "volley", "wait": 0.35}, {"kind": "heavy", "wait": 1.10},
+]
+
+const FOUR_ARM_PATTERN := [
+	{"kind": "stone", "wait": 0.24}, {"kind": "volley", "wait": 0.15},
+	{"kind": "volley", "wait": 0.15}, {"kind": "stone", "wait": 0.20},
+	{"kind": "heavy", "wait": 0.48}, {"kind": "volley", "wait": 0.14},
+	{"kind": "volley", "wait": 0.14}, {"kind": "stone", "wait": 0.28},
+]
+
+const BOSSES := [
+	{"id": "cracked", "name": "ひび割れゴーレム", "hp": 360.0, "note": "投石の間を読み、護衛の基本を覚える巨像。"},
+	{"id": "four_arm", "name": "四腕の連撃ゴーレム", "hp": 720.0, "note": "四本の腕で岩を連続投擲する、強敵の巨像。"},
 ]
 
 var audio_player: AudioStreamPlayer
@@ -306,16 +320,19 @@ func _process_attack(delta: float) -> void:
 			_start_attack()
 
 func _start_attack() -> void:
-	var entry: Dictionary = PATTERN[attack_index]
-	attack_index = (attack_index + 1) % PATTERN.size()
+	var pattern := _boss_pattern()
+	var entry: Dictionary = pattern[attack_index]
+	attack_index = (attack_index + 1) % pattern.size()
 	attack_kind = str(entry["kind"])
-	attack_duration = 1.15 if attack_kind == "stone" else (0.82 if attack_kind == "volley" else 1.45)
+	var rapid := selected_boss == "four_arm"
+	attack_duration = (0.84 if rapid else 1.15) if attack_kind == "stone" else ((0.58 if rapid else 0.82) if attack_kind == "volley" else (1.18 if rapid else 1.45))
 	attack_t = 0.0
 	attack_active = true
 
 func _resolve_attack() -> void:
 	attack_active = false
-	var last: Dictionary = PATTERN[(attack_index - 1 + PATTERN.size()) % PATTERN.size()]
+	var pattern := _boss_pattern()
+	var last: Dictionary = pattern[(attack_index - 1 + pattern.size()) % pattern.size()]
 	attack_wait = float(last["wait"])
 	if mode != Mode.DOWNED and guarding:
 		_block()
@@ -323,7 +340,7 @@ func _resolve_attack() -> void:
 		_damage_princess(2 if attack_kind == "heavy" else 1)
 
 func _block() -> void:
-	var attack_power := 9.0 if attack_kind == "stone" else (6.0 if attack_kind == "volley" else 23.0)
+	var attack_power := _attack_power()
 	var cap_cost := attack_power * (1.0 - cap_resist * 0.10)
 	stamina = maxf(0.0, stamina - cap_cost * 0.72)
 	cap = maxf(0.0, cap - cap_cost)
@@ -360,6 +377,7 @@ func _start_expedition() -> void:
 		_show_dialog("休息が必要", "遠征から戻った後は、眠るまで再び出撃できません。")
 		return
 	mode = Mode.BATTLE
+	boss_hp_max = float(_boss_data()["hp"])
 	boss_hp = boss_hp_max
 	princess_hp = 5
 	cap = base_cap
@@ -427,6 +445,19 @@ func _shield_data(id: String) -> Dictionary:
 		if str(shield["id"]) == id:
 			return shield
 	return SHIELDS[0]
+
+func _boss_data() -> Dictionary:
+	for boss in BOSSES:
+		if str(boss["id"]) == selected_boss:
+			return boss
+	return BOSSES[0]
+
+func _boss_pattern() -> Array:
+	return FOUR_ARM_PATTERN if selected_boss == "four_arm" else PATTERN
+
+func _attack_power() -> float:
+	var base_power := 9.0 if attack_kind == "stone" else (6.0 if attack_kind == "volley" else 23.0)
+	return base_power * 1.32 if selected_boss == "four_arm" else base_power
 
 func _shield_exists(id: String) -> bool:
 	for shield in SHIELDS:
@@ -540,8 +571,18 @@ func _input(event: InputEvent) -> void:
 			if Rect2(24, 670, 384, 42).has_point(pos):
 				home_panel = HomePanel.MAIN
 			return
+		if home_panel == HomePanel.BOSS_SELECT:
+			for index in range(BOSSES.size()):
+				if Rect2(24, 382 + index * 94, 384, 78).has_point(pos):
+					selected_boss = str(BOSSES[index]["id"])
+					_start_expedition()
+					return
+			if Rect2(24, 670, 384, 42).has_point(pos):
+				home_panel = HomePanel.MAIN
+			return
 		if Rect2(40, 505, 352, 58).has_point(pos):
-			_start_expedition()
+			if not needs_rest:
+				home_panel = HomePanel.BOSS_SELECT
 		elif Rect2(20, 575, 124, 58).has_point(pos):
 			_sleep()
 		elif Rect2(154, 575, 124, 58).has_point(pos):
@@ -624,6 +665,8 @@ func _draw() -> void:
 		background = HOME_ART
 	elif mode == Mode.ARMORER:
 		background = ARMORER_ART
+	elif selected_boss == "four_arm":
+		background = FOUR_ARM_ART
 	draw_texture_rect(background, Rect2(0, 0, W, H), false)
 	draw_rect(Rect2(0, 0, W, H), Color(0.02, 0.04, 0.10, 0.17), true)
 	if mode == Mode.TITLE:
@@ -670,6 +713,9 @@ func _draw_home() -> void:
 	if home_panel == HomePanel.EQUIPMENT:
 		_draw_equipment()
 		return
+	if home_panel == HomePanel.BOSS_SELECT:
+		_draw_boss_select()
+		return
 	draw_rect(Rect2(20, 22, 392, 92), Color(0.02, 0.04, 0.10, 0.86), true)
 	draw_string(JP_FONT, Vector2(40, 52), "護衛の仮宿", HORIZONTAL_ALIGNMENT_LEFT, -1, 21, Color.WHITE)
 	draw_string(JP_FONT, Vector2(40, 78), "腕力 Lv.%d    経験値 %d / %d    今回 +%d" % [arm_level, int(level_xp), int(_need_xp()), int(pending_xp)], HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("c9daf5"))
@@ -679,7 +725,7 @@ func _draw_home() -> void:
 	draw_string(JP_FONT, Vector2(48, 427), "王女を守り、鉱石を持ち帰り、眠って強くなる。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("c9daf5"))
 	draw_string(JP_FONT, Vector2(48, 455), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f2a5c7"))
 	var expedition_color := Color("3a6384") if not needs_rest else Color("293846")
-	_button(Rect2(40, 505, 352, 58), "出撃 — ひび割れゴーレム" if not needs_rest else "眠るまで出撃できない", expedition_color)
+	_button(Rect2(40, 505, 352, 58), "出撃先を選ぶ" if not needs_rest else "眠るまで出撃できない", expedition_color)
 	_button(Rect2(20, 575, 124, 58), "眠る", Color("4d5979"))
 	_button(Rect2(154, 575, 124, 58), "盾を装備", Color("536f7b"))
 	_button(Rect2(288, 575, 124, 58), "防具屋へ", Color("785a45"))
@@ -688,6 +734,23 @@ func _draw_home() -> void:
 	draw_string(JP_FONT, Vector2(36, 685), _shield_stats_text(shield), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("d9e5ff"))
 	if needs_rest:
 		draw_string(JP_FONT, Vector2(36, 711), "遠征後のため、眠ると次の出撃が可能になります。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f4c6d7"))
+
+func _draw_boss_select() -> void:
+	draw_rect(Rect2(18, 18, 396, 90), Color(0.02, 0.04, 0.10, 0.86), true)
+	draw_string(JP_FONT, Vector2(38, 50), "出撃先を選ぶ", HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color.WHITE)
+	draw_string(JP_FONT, Vector2(38, 78), "挑む巨像を選んで遠征へ向かう。", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("c9daf5"))
+	draw_string(JP_FONT, Vector2(38, 100), "強敵ほど、一撃の経験値も大きい。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f2d092"))
+	draw_rect(Rect2(18, 354, 396, 330), Color(0.02, 0.04, 0.10, 0.84), true)
+	for index in range(BOSSES.size()):
+		var boss: Dictionary = BOSSES[index]
+		var rect := Rect2(24, 382 + index * 94, 384, 78)
+		var color := Color("73516f") if str(boss["id"]) == "four_arm" else Color("4d6680")
+		draw_rect(rect, color, true)
+		draw_rect(rect, Color("b7d6ec"), false, 1.0)
+		draw_string(JP_FONT, Vector2(38, rect.position.y + 25), str(boss["name"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color.WHITE)
+		draw_string(JP_FONT, Vector2(38, rect.position.y + 47), "HP %d　%s" % [int(boss["hp"]), str(boss["note"])], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("d9e5ff"))
+		draw_string(JP_FONT, Vector2(38, rect.position.y + 67), "タップして出撃", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("f2d092"))
+	_button(Rect2(24, 670, 384, 42), "戻る", Color("3e4a61"))
 
 func _draw_equipment() -> void:
 	draw_rect(Rect2(18, 18, 396, 90), Color(0.02, 0.04, 0.10, 0.86), true)
@@ -824,7 +887,7 @@ func _draw_battle() -> void:
 
 func _draw_hud() -> void:
 	draw_rect(Rect2(16, 18, 400, 112), Color(0.02, 0.04, 0.10, 0.84), true)
-	draw_string(JP_FONT, Vector2(32, 44), "ひび割れゴーレム", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color.WHITE)
+	draw_string(JP_FONT, Vector2(32, 44), str(_boss_data()["name"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color.WHITE)
 	draw_rect(Rect2(32, 53, 240, 10), Color("2c2940"), true)
 	draw_rect(Rect2(32, 53, 240 * boss_hp / boss_hp_max, 10), Color("d8709b"), true)
 	draw_string(JP_FONT, Vector2(288, 63), "敵HP %d%%" % int(100.0 * boss_hp / boss_hp_max), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f3c8d7"))
