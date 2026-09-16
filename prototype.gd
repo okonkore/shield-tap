@@ -16,6 +16,7 @@ const GOLEM_TARGET := Vector2(326, 212)
 const ROCK_START_HEIGHT := 3.95
 const ROCK_END_HEIGHT := -1.05
 const ROCK_GRAVITY := 8.0
+const ORE_DAMAGE_STEP := 14.0
 
 enum Mode { TITLE, HOME, ARMORER, BATTLE, RECALL, DOWNED }
 enum TitlePanel { MAIN, CONTINUE, NEW_GAME }
@@ -62,6 +63,7 @@ var boss_hp_max := 360.0
 var princess_hp := 5
 var blocks := 0
 var run_ore := 0
+var mined_damage := 0.0
 var run_xp := 0.0
 var recall_ready := false
 var recall_time := 0.0
@@ -204,8 +206,14 @@ func _new_game(slot: int) -> void:
 
 func _process_expedition(delta: float) -> void:
 	battle_clock += delta
-	# The princess damages the boss continuously. A successful full fight takes about 100 seconds.
-	boss_hp = maxf(0.0, boss_hp - (3.45 + arm_level * 0.22) * delta)
+	# The princess's mining magic both damages the golem and exposes fragments of its ore body.
+	var magic_damage := (3.45 + arm_level * 0.22) * delta
+	boss_hp = maxf(0.0, boss_hp - magic_damage)
+	mined_damage += magic_damage
+	var newly_mined := int(floor(mined_damage / ORE_DAMAGE_STEP))
+	if newly_mined > 0:
+		run_ore += newly_mined
+		mined_damage = fmod(mined_damage, ORE_DAMAGE_STEP)
 	if boss_hp <= 0.0:
 		_finish(true, "ゴーレムを鎮めた")
 		return
@@ -287,8 +295,6 @@ func _block() -> void:
 	# Training follows the enemy's original attack power, not the shield's mitigated damage.
 	run_xp += attack_power
 	blocks += 1
-	if blocks % 2 == 0:
-		run_ore += 1
 	if blocks >= 4:
 		recall_ready = true
 	flash = 0.18
@@ -325,6 +331,7 @@ func _start_expedition() -> void:
 	stamina = cap
 	blocks = 0
 	run_ore = 0
+	mined_damage = 0.0
 	run_xp = 0.0
 	recall_ready = false
 	recall_time = 0.0
@@ -703,6 +710,10 @@ func _draw_princess_attack() -> void:
 	draw_circle(orb, 15.0, Color(0.60, 0.26, 0.95, 0.16))
 	draw_circle(orb, 8.0, Color(0.77, 0.54, 1.0, 0.72))
 	draw_circle(orb, 3.0, Color("f4e5ff"))
+	if shot_t > 0.84:
+		var impact_alpha := (shot_t - 0.84) / 0.16
+		draw_circle(GOLEM_TARGET, 11.0 + impact_alpha * 14.0, Color(0.64, 0.42, 1.0, 0.24 * (1.0 - impact_alpha)))
+		draw_circle(GOLEM_TARGET, 4.0, Color("e9d4ff"))
 	if shot_t < 0.22:
 		var cast_radius := 17.0 + sin(shot_t / 0.22 * PI) * 10.0
 		draw_arc(PRINCESS_CAST, cast_radius, 0.0, TAU, 18, Color(0.78, 0.53, 1.0, 0.45), 2.0, true)
@@ -759,7 +770,7 @@ func _draw_battle() -> void:
 	_draw_hud()
 
 func _draw_hud() -> void:
-	draw_rect(Rect2(16, 18, 400, 92), Color(0.02, 0.04, 0.10, 0.84), true)
+	draw_rect(Rect2(16, 18, 400, 112), Color(0.02, 0.04, 0.10, 0.84), true)
 	draw_string(JP_FONT, Vector2(32, 44), "ひび割れゴーレム", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color.WHITE)
 	draw_rect(Rect2(32, 53, 240, 10), Color("2c2940"), true)
 	draw_rect(Rect2(32, 53, 240 * boss_hp / boss_hp_max, 10), Color("d8709b"), true)
@@ -769,6 +780,7 @@ func _draw_hud() -> void:
 	draw_rect(Rect2(112, 76, 160 * cap / base_cap, 11), Color("355d8d"), true)
 	draw_rect(Rect2(112, 76, 160 * stamina / base_cap, 11), Color("66c8d9"), true)
 	draw_string(JP_FONT, Vector2(288, 86), "王女 %d" % princess_hp, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("f2a5c7"))
+	draw_string(JP_FONT, Vector2(32, 112), "王女の採掘　鉱石 +%d　次の欠片まで %.0f" % [run_ore, maxf(0.0, ORE_DAMAGE_STEP - mined_damage)], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("caa5ff"))
 	draw_rect(Rect2(16, 731, 400, 25), Color(0.02, 0.04, 0.10, 0.84), true)
 	draw_string(JP_FONT, Vector2(28, 749), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("e8f1ff"))
 	if recall_ready and mode == Mode.BATTLE:
