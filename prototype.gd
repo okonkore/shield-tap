@@ -647,6 +647,9 @@ func _rock_radius(t: float) -> float:
 	return FOCAL * 0.16 * size / lerpf(7.0, 1.0, t)
 
 func _play_sound(freq: float, duration: float, noise: float, drop: float) -> void:
+	if OS.has_feature("web"):
+		JavaScriptBridge.eval("window.shieldTapAudio&&window.shieldTapAudio.play(%f,%f,%f,%f)" % [freq, duration, noise, drop], true)
+		return
 	tone_frequency = freq
 	tone_total = int(44100.0 * duration)
 	tone_frames = tone_total
