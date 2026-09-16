@@ -118,6 +118,7 @@ const BOSSES := [
 
 var audio_player: AudioStreamPlayer
 var audio_playback: AudioStreamGeneratorPlayback
+var audio_unlocked := false
 var tone_frames := 0
 var tone_total := 0
 var tone_phase := 0.0
@@ -137,8 +138,15 @@ func _setup_audio() -> void:
 	stream.buffer_length = 0.35
 	audio_player.stream = stream
 	add_child(audio_player)
+
+func _unlock_audio() -> void:
+	# Safari blocks Web Audio until this runs in response to the player's first tap.
+	if audio_unlocked:
+		return
+	audio_unlocked = true
 	audio_player.play()
 	audio_playback = audio_player.get_stream_playback()
+	_play_sound(520.0, 0.08, 0.02, -0.04)
 
 func _process(delta: float) -> void:
 	_fill_audio()
@@ -530,6 +538,7 @@ func _input(event: InputEvent) -> void:
 		return
 	last_press_msec = now_msec
 	last_press_pos = pos
+	_unlock_audio()
 	if dialog_visible:
 		dialog_visible = false
 		return
