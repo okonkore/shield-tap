@@ -14,9 +14,11 @@ const ROCK_END_HEIGHT := -1.05
 const ROCK_GRAVITY := 8.0
 
 enum Mode { TITLE, HOME, BATTLE, RECALL, DOWNED }
-const SAVE_KEY := "shield-tap-save-v1"
+const SAVE_KEY_PREFIX := "shield-tap-save-v2-"
+const SAVE_SLOT_COUNT := 3
 var mode := Mode.TITLE
-var has_save := false
+var selected_slot := -1
+var save_slots: Array = []
 var needs_rest := false
 
 # Persistent progression. Values are deliberately simple for the first playable slice.
@@ -71,7 +73,7 @@ var tone_drop := 0.0
 
 func _ready() -> void:
 	_setup_audio()
-	has_save = _load_save()
+	_load_save_slots()
 	queue_redraw()
 
 func _setup_audio() -> void:
@@ -91,16 +93,26 @@ func _process(delta: float) -> void:
 		_process_expedition(delta)
 	queue_redraw()
 
-func _load_save() -> bool:
+func _slot_key(slot: int) -> String:
+	return "%s%d" % [SAVE_KEY_PREFIX, slot]
+
+func _read_slot(slot: int) -> Dictionary:
 	if not OS.has_feature("web"):
-		return false
-	var raw = JavaScriptBridge.eval("localStorage.getItem('%s')" % SAVE_KEY, true)
+		return {}
+	var raw = JavaScriptBridge.eval("localStorage.getItem('%s')" % _slot_key(slot), true)
 	if not raw is String or raw.is_empty():
-		return false
+		return {}
 	var json := JSON.new()
 	if json.parse(raw) != OK or not json.data is Dictionary:
-		return false
-	var data: Dictionary = json.data
+		return {}
+	return json.data
+
+func _load_save_slots() -> void:
+	save_slots.clear()
+	for slot in range(SAVE_SLOT_COUNT):
+		save_slots.append(_read_slot(slot))
+
+func _apply_save(data: Dictionary) -> void:
 	arm_level = int(data.get("arm_level", 1))
 	level_xp = float(data.get("level_xp", 0.0))
 	pending_xp = float(data.get("pending_xp", 0.0))
@@ -110,22 +122,33 @@ func _load_save() -> bool:
 	lightness = int(data.get("lightness", 0))
 	efficiency = int(data.get("efficiency", 0))
 	needs_rest = bool(data.get("needs_rest", false))
-	message = "セーブデータを読み込んだ"
-	return true
+
+func _continue_game(slot: int) -> void:
+	var data := _read_slot(slot)
+	if data.is_empty():
+		return
+	selected_slot = slot
+	_apply_save(data)
+	message = "セーブ%dから再開した" % (slot + 1)
+	mode = Mode.HOME
 
 func _save_progress() -> void:
-	has_save = true
-	if not OS.has_feature("web"):
+	if selected_slot < 0:
 		return
 	var data := {
 		"arm_level": arm_level, "level_xp": level_xp, "pending_xp": pending_xp,
 		"ore": ore, "base_cap": base_cap, "cap_resist": cap_resist,
 		"lightness": lightness, "efficiency": efficiency, "needs_rest": needs_rest,
 	}
+	if selected_slot < save_slots.size():
+		save_slots[selected_slot] = data
+	if not OS.has_feature("web"):
+		return
 	var payload := JSON.stringify(data)
-	JavaScriptBridge.eval("localStorage.setItem('%s', %s)" % [SAVE_KEY, JSON.stringify(payload)], true)
+	JavaScriptBridge.eval("localStorage.setItem('%s', %s)" % [_slot_key(selected_slot), JSON.stringify(payload)], true)
 
-func _new_game() -> void:
+func _new_game(slot: int) -> void:
+	selected_slot = slot
 	arm_level = 1
 	level_xp = 0.0
 	pending_xp = 0.0
@@ -332,11 +355,15 @@ func _input(event: InputEvent) -> void:
 	if not pressed:
 		return
 	if mode == Mode.TITLE:
-		if Rect2(40, 510, 352, 58).has_point(pos) and has_save:
-			mode = Mode.HOME
-			message = "セーブデータから再開した"
-		elif Rect2(40, 580, 352, 58).has_point(pos):
-			_new_game()
+		for slot in range(SAVE_SLOT_COUNT):
+			var row_y := 390.0 + slot * 92.0
+			var slot_data: Dictionary = save_slots[slot]
+			if Rect2(40, row_y, 226, 58).has_point(pos) and not slot_data.is_empty():
+				_continue_game(slot)
+				return
+			if Rect2(276, row_y, 116, 58).has_point(pos):
+				_new_game(slot)
+				return
 		return
 	if mode == Mode.HOME:
 		if Rect2(40, 505, 352, 58).has_point(pos):
@@ -404,13 +431,21 @@ func _draw() -> void:
 		_draw_battle()
 
 func _draw_title() -> void:
-	draw_rect(Rect2(20, 80, 392, 190), Color(0.02, 0.04, 0.10, 0.82), true)
+	draw_rect(Rect2(20, 74, 392, 220), Color(0.02, 0.04, 0.10, 0.82), true)
 	draw_string(JP_FONT, Vector2(62, 145), "護衛のリズム", HORIZONTAL_ALIGNMENT_LEFT, -1, 35, Color.WHITE)
 	draw_string(JP_FONT, Vector2(62, 180), "王女を守り、巨像に挑む。", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("d7c9f5"))
-	draw_string(JP_FONT, Vector2(62, 218), "セーブデータはこの端末に保存されます。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("a9bfdc"))
-	var continue_color := Color("4d6680") if has_save else Color("252d3a")
-	_button(Rect2(40, 510, 352, 58), "つづきから" if has_save else "つづきから（データなし）", continue_color)
-	_button(Rect2(40, 580, 352, 58), "はじめから", Color("76516f"))
+	draw_string(JP_FONT, Vector2(62, 218), "セーブ枠を選んでください。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("a9bfdc"))
+	draw_string(JP_FONT, Vector2(62, 250), "データはこの端末に保存されます。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("a9bfdc"))
+	for slot in range(SAVE_SLOT_COUNT):
+		var row_y := 390.0 + slot * 92.0
+		var slot_data: Dictionary = save_slots[slot]
+		var slot_label := "セーブ%d：空き" % (slot + 1)
+		var continue_color := Color("252d3a")
+		if not slot_data.is_empty():
+			slot_label = "セーブ%d：腕力 Lv.%d　鉱石 %d" % [slot + 1, int(slot_data.get("arm_level", 1)), int(slot_data.get("ore", 0))]
+			continue_color = Color("4d6680")
+		_button(Rect2(40, row_y, 226, 58), slot_label, continue_color)
+		_button(Rect2(276, row_y, 116, 58), "はじめから", Color("76516f"))
 
 func _draw_home() -> void:
 	draw_rect(Rect2(20, 22, 392, 92), Color(0.02, 0.04, 0.10, 0.86), true)
