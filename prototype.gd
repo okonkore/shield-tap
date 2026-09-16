@@ -11,6 +11,8 @@ const HY := 300.0
 const FOCAL := 250.0
 const SHIELD := Vector2(125, 568)
 const SHIELD_FOOT := Vector2(125, 662)
+const PRINCESS_CAST := Vector2(178, 594)
+const GOLEM_TARGET := Vector2(326, 212)
 const ROCK_START_HEIGHT := 3.95
 const ROCK_END_HEIGHT := -1.05
 const ROCK_GRAVITY := 8.0
@@ -76,6 +78,7 @@ var attack_kind := "stone"
 var attack_wait := 1.0
 var attack_index := 0
 var flash := 0.0
+var battle_clock := 0.0
 var message := "出撃してゴーレムに挑もう"
 var dialog_visible := false
 var dialog_title := ""
@@ -200,6 +203,7 @@ func _new_game(slot: int) -> void:
 	title_panel = TitlePanel.MAIN
 
 func _process_expedition(delta: float) -> void:
+	battle_clock += delta
 	# The princess damages the boss continuously. A successful full fight takes about 100 seconds.
 	boss_hp = maxf(0.0, boss_hp - (3.45 + arm_level * 0.22) * delta)
 	if boss_hp <= 0.0:
@@ -326,6 +330,7 @@ func _start_expedition() -> void:
 	exhausted_time = 0.0
 	raise_total = 0.0
 	shield_lift = 0.0
+	battle_clock = 0.0
 	attack_active = false
 	attack_wait = 1.0
 	attack_index = 0
@@ -680,6 +685,42 @@ func _draw_armorer() -> void:
 	draw_string(JP_FONT, Vector2(184, 645), "%d / %d" % [armorer_page + 1, recipe_pages], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("d9e5ff"))
 	_button(Rect2(24, 674, 384, 42), "自室へ戻る", Color("3e4a61"))
 
+func _draw_princess_attack() -> void:
+	# A repeating arcing spell shot makes the princess's continuous damage visible.
+	var shot_t := fmod(battle_clock, 0.92) / 0.92
+	var trail := PackedVector2Array()
+	for index in range(18):
+		var t := shot_t * float(index) / 17.0
+		var point := PRINCESS_CAST.lerp(GOLEM_TARGET, t)
+		point.y -= sin(PI * t) * 58.0
+		trail.append(point)
+	draw_polyline(trail, Color(0.74, 0.48, 1.0, 0.28), 2.0, true)
+	var orb := PRINCESS_CAST.lerp(GOLEM_TARGET, shot_t)
+	orb.y -= sin(PI * shot_t) * 58.0
+	draw_circle(orb, 15.0, Color(0.60, 0.26, 0.95, 0.16))
+	draw_circle(orb, 8.0, Color(0.77, 0.54, 1.0, 0.72))
+	draw_circle(orb, 3.0, Color("f4e5ff"))
+	if shot_t < 0.22:
+		var cast_radius := 17.0 + sin(shot_t / 0.22 * PI) * 10.0
+		draw_arc(PRINCESS_CAST, cast_radius, 0.0, TAU, 18, Color(0.78, 0.53, 1.0, 0.45), 2.0, true)
+
+func _draw_recall_effect() -> void:
+	if mode != Mode.RECALL:
+		return
+	var progress := clampf(1.0 - recall_time / 2.6, 0.0, 1.0)
+	var center := PRINCESS_CAST
+	var radius := lerpf(38.0, 106.0, progress)
+	var spin := battle_clock * 3.8
+	draw_circle(center, radius, Color(0.55, 0.22, 0.94, 0.08 + progress * 0.10))
+	draw_arc(center, radius, spin, spin + TAU * 0.72, 36, Color(0.88, 0.60, 1.0, 0.78), 3.0, true)
+	draw_arc(center, radius * 0.62, -spin * 1.4, -spin * 1.4 + TAU * 0.66, 28, Color(0.55, 0.82, 1.0, 0.64), 2.0, true)
+	for index in range(8):
+		var angle := spin + TAU * float(index) / 8.0
+		var spark_radius := radius * (0.48 + 0.45 * fmod(battle_clock * 0.8 + float(index) * 0.13, 1.0))
+		var spark := center + Vector2(cos(angle), sin(angle)) * spark_radius
+		draw_circle(spark, 3.0 + progress * 3.0, Color("f2d4ff"))
+	draw_string(JP_FONT, center + Vector2(-52, radius + 24), "帰還魔法を詠唱中", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f4d7ff"))
+
 func _draw_battle() -> void:
 	if flash > 0.0:
 		draw_rect(Rect2(0, 0, W, H), Color(0.62, 0.88, 1.0, flash * 0.42), true)
@@ -687,6 +728,7 @@ func _draw_battle() -> void:
 	for i in range(25):
 		path.append(_rock_pos(float(i) / 24.0))
 	draw_polyline(path, Color(0.45, 0.72, 0.98, 0.15), 2.0, true)
+	_draw_princess_attack()
 	if attack_active:
 		var tip := _rock_pos(attack_t)
 		var before := _rock_pos(maxf(0.0, attack_t - 0.025))
@@ -707,6 +749,7 @@ func _draw_battle() -> void:
 		draw_arc(shield_pos, shield_radius + 8, PI, TAU, 28, Color("d9f5ff"), 6)
 	elif held and shield_lift > 0.0:
 		draw_string(JP_FONT, shield_pos + Vector2(-39, -shield_radius - 12), "持ち上げ中", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("d9f5ff"))
+	_draw_recall_effect()
 	if mode == Mode.DOWNED:
 		draw_circle(SHIELD + Vector2(0, 32), 30, Color(0.01, 0.02, 0.05, 0.62))
 		draw_string(JP_FONT, Vector2(58, 568), "力尽きた", HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color("f2a5c7"))
