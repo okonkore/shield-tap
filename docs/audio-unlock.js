@@ -8,6 +8,7 @@
 	const NativeAudioContext = window.AudioContext || window.webkitAudioContext;
 	let gameContext = null;
 	let confirmed = false;
+	let guardBuffer = null;
 	const guardSound = new Audio('shield-tap-guard-pan-v1.mp3');
 	guardSound.preload = 'auto';
 	guardSound.volume = 0.72;
@@ -29,6 +30,32 @@
 		if (!gameContext && NativeAudioContext) gameContext = new NativeAudioContext();
 		return gameContext;
 	};
+	const trimGuardLeadIn = (context, buffer) => {
+		const threshold = 0.012;
+		let firstFrame = 0;
+		outer: for (; firstFrame < buffer.length; firstFrame++) {
+			for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+				if (Math.abs(buffer.getChannelData(channel)[firstFrame]) >= threshold) break outer;
+			}
+		}
+		// Keep a tiny lead-in so the impact does not click, but remove MP3 padding/silence.
+		const startFrame = Math.max(0, firstFrame - Math.floor(buffer.sampleRate * 0.003));
+		if (startFrame === 0 || startFrame >= buffer.length) return buffer;
+		const clipped = context.createBuffer(buffer.numberOfChannels, buffer.length - startFrame, buffer.sampleRate);
+		for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+			clipped.copyToChannel(buffer.getChannelData(channel).subarray(startFrame), channel);
+		}
+		return clipped;
+	};
+	const loadGuardSound = () => {
+		const context = getGameContext();
+		if (!context) return;
+		fetch('shield-tap-guard-pan-v1.mp3')
+			.then((response) => response.arrayBuffer())
+			.then((bytes) => context.decodeAudioData(bytes))
+			.then((buffer) => { guardBuffer = trimGuardLeadIn(context, buffer); })
+			.catch(() => {});
+	};
 	const play = (frequency, duration, noise, drop) => {
 		const context = getGameContext();
 		if (!context) return;
@@ -47,12 +74,23 @@
 		oscillator.stop(now + duration + 0.02);
 	};
 	const playGuard = () => {
-		// A fresh element permits rapid consecutive blocks without cutting off the prior clang.
+		const context = getGameContext();
+		if (context && guardBuffer && context.state === 'running') {
+			const source = context.createBufferSource();
+			const gain = context.createGain();
+			source.buffer = guardBuffer;
+			gain.gain.value = 0.72;
+			source.connect(gain).connect(context.destination);
+			source.start(context.currentTime);
+			return;
+		}
+		// Used only until the predecoded buffer has finished loading.
 		const sound = guardSound.cloneNode();
 		sound.volume = 0.72;
 		sound.play().catch(() => play(210, 0.16, 0.13, -0.12));
 	};
 	window.shieldTapAudio = { play, playGuard };
+	loadGuardSound();
 	const unlock = () => {
 		for (const context of contexts) {
 			if (context.state !== 'running') context.resume().catch(() => {});
