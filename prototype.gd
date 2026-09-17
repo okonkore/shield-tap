@@ -94,6 +94,7 @@ var flash := 0.0
 var battle_clock := 0.0
 var princess_cast_clock := 0.0
 var princess_impact_time := 0.0
+var princess_cast_cancel_time := 0.0
 var resonance_charge := 0.0
 var resonance_ready := false
 var resonance_flash := 0.0
@@ -244,9 +245,10 @@ func _process_expedition(delta: float) -> void:
 	battle_clock += delta
 	princess_cast_clock += delta
 	princess_impact_time = maxf(0.0, princess_impact_time - delta)
+	princess_cast_cancel_time = maxf(0.0, princess_cast_cancel_time - delta)
 	resonance_flash = maxf(0.0, resonance_flash - delta)
 	shield_ground_impact = maxf(0.0, shield_ground_impact - delta)
-	var cast_period := 1.65 if resonance_ready and _resonance_type() == "swift" else PRINCESS_CAST_PERIOD
+	var cast_period := _princess_cast_period()
 	if princess_cast_clock >= cast_period:
 		princess_cast_clock -= cast_period
 		_princess_magic_hit()
@@ -292,6 +294,12 @@ func _princess_magic_hit() -> void:
 		run_ore += newly_mined
 		mined_damage = fmod(mined_damage, ORE_DAMAGE_STEP)
 	princess_impact_time = 0.32
+
+func _princess_cast_period() -> float:
+	return 1.65 if resonance_ready and _resonance_type() == "swift" else PRINCESS_CAST_PERIOD
+
+func _princess_is_chanting() -> bool:
+	return princess_cast_clock < _princess_cast_period() * PRINCESS_CHANT_RATIO
 
 func _resonance_type() -> String:
 	return str(_shield_data(equipped_shield).get("resonance", ""))
@@ -423,12 +431,18 @@ func _block() -> void:
 		exhausted_time = 2.0
 
 func _damage_princess(damage: int) -> void:
+	var chanting := _princess_is_chanting()
 	princess_hp = max(0, princess_hp - damage)
 	flash = 0.24
 	# A descending noisy thud makes an unblocked hit immediately recognizable.
 	_play_sound(160.0, 0.34, 0.42, -0.62)
 	if princess_hp <= 0:
 		_finish(false, "王女が倒れた")
+	elif chanting:
+		# A hit breaks the spell before it is released; the next spell must be chanted from the start.
+		princess_cast_clock = 0.0
+		princess_cast_cancel_time = 0.56
+		message = "王女が被弾 — 詠唱が中断された"
 	else:
 		message = "王女が被弾 — 盾で守れ"
 
@@ -457,6 +471,7 @@ func _start_expedition() -> void:
 	battle_clock = 0.0
 	princess_cast_clock = 0.0
 	princess_impact_time = 0.0
+	princess_cast_cancel_time = 0.0
 	resonance_charge = 0.0
 	resonance_ready = false
 	resonance_flash = 0.0
@@ -871,7 +886,7 @@ func _draw_armorer() -> void:
 	_button(Rect2(24, 674, 384, 42), "自室へ戻る", Color("3e4a61"))
 
 func _draw_princess_attack() -> void:
-	var cycle_t := princess_cast_clock / PRINCESS_CAST_PERIOD
+	var cycle_t := princess_cast_clock / _princess_cast_period()
 	if cycle_t < PRINCESS_CHANT_RATIO:
 		var chant_t := cycle_t / PRINCESS_CHANT_RATIO
 		var cast_radius := 22.0 + chant_t * 33.0
@@ -902,6 +917,15 @@ func _draw_princess_attack() -> void:
 		var impact_t := princess_impact_time / 0.32
 		draw_circle(GOLEM_TARGET, 14.0 + (1.0 - impact_t) * 22.0, Color(0.64, 0.42, 1.0, 0.34 * impact_t))
 		draw_circle(GOLEM_TARGET, 5.0, Color("e9d4ff"))
+	if princess_cast_cancel_time > 0.0:
+		var cancel_t := princess_cast_cancel_time / 0.56
+		var burst_radius := 28.0 + (1.0 - cancel_t) * 38.0
+		draw_circle(PRINCESS_CAST, burst_radius, Color(0.95, 0.42, 0.72, 0.10 * cancel_t))
+		for index in range(6):
+			var angle := TAU * float(index) / 6.0 + (1.0 - cancel_t) * 0.5
+			var spark := PRINCESS_CAST + Vector2(cos(angle), sin(angle)) * burst_radius
+			draw_circle(spark, 2.0 + cancel_t * 2.0, Color(1.0, 0.64, 0.82, cancel_t))
+		draw_string(JP_FONT, PRINCESS_CAST + Vector2(-36, -burst_radius - 12), "詠唱中断", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("ffc0d9"))
 
 func _draw_recall_effect() -> void:
 	if mode != Mode.RECALL:
