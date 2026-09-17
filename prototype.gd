@@ -21,7 +21,7 @@ const ORE_DAMAGE_STEP := 14.0
 const PRINCESS_CAST_PERIOD := 3.0
 const PRINCESS_CHANT_RATIO := 0.48
 const RECALL_CHANT_DURATION := 5.2
-const SHIELD_POINT_BONUS := 0.18
+const SHIELD_POINT_BONUS := 0.08
 const RESONANCE_GUARD_GOAL := 45.0
 const PRINCESS_HP_MAX := 50
 
@@ -35,6 +35,8 @@ var title_panel := TitlePanel.MAIN
 var home_panel := HomePanel.MAIN
 var equipment_page := 0
 var armorer_page := 0
+var wand_equipment_page := 0
+var wand_shop_page := 0
 var selected_slot := -1
 var save_slots: Array = []
 var selected_boss := "cracked"
@@ -60,6 +62,20 @@ const SHIELDS := [
 	{"id": "black_leather_2", "name": "黒革の塔盾", "cost": 8, "weight": 2, "resist": 0, "efficient": 2, "note": "省力化に特化したLv.2盾"},
 	{"id": "moon_iron_3", "name": "月鉄の城壁盾", "cost": 9, "weight": 3, "resist": 3, "efficient": 0, "note": "上限耐性に特化したLv.3盾"},
 	{"id": "black_leather_3", "name": "黒革の城砦盾", "cost": 12, "weight": 3, "resist": 0, "efficient": 3, "note": "省力化に特化したLv.3盾"},
+	{"id": "moon_iron_4", "name": "月鉄の要塞盾", "cost": 13, "weight": 4, "resist": 4, "efficient": 0, "note": "上限耐性に特化したLv.4盾"},
+	{"id": "black_leather_4", "name": "黒革の守備盾", "cost": 17, "weight": 4, "resist": 0, "efficient": 4, "note": "省力化に特化したLv.4盾"},
+	{"id": "moon_iron_5", "name": "蒼月の要塞盾", "cost": 17, "weight": 5, "resist": 5, "efficient": 0, "note": "上限耐性に特化したLv.5盾"},
+	{"id": "black_leather_5", "name": "影革の守備盾", "cost": 22, "weight": 5, "resist": 0, "efficient": 5, "note": "省力化に特化したLv.5盾"},
+	{"id": "moon_iron_6", "name": "星鉄の要塞盾", "cost": 22, "weight": 6, "resist": 6, "efficient": 0, "note": "上限耐性に特化したLv.6盾"},
+	{"id": "black_leather_6", "name": "夜革の守備盾", "cost": 28, "weight": 6, "resist": 0, "efficient": 6, "note": "省力化に特化したLv.6盾"},
+	{"id": "moon_iron_7", "name": "白銀の要塞盾", "cost": 28, "weight": 7, "resist": 7, "efficient": 0, "note": "上限耐性に特化したLv.7盾"},
+	{"id": "black_leather_7", "name": "霊革の守備盾", "cost": 35, "weight": 7, "resist": 0, "efficient": 7, "note": "省力化に特化したLv.7盾"},
+	{"id": "moon_iron_8", "name": "夜晶の要塞盾", "cost": 35, "weight": 8, "resist": 8, "efficient": 0, "note": "上限耐性に特化したLv.8盾"},
+	{"id": "black_leather_8", "name": "月獣の守備盾", "cost": 43, "weight": 8, "resist": 0, "efficient": 8, "note": "省力化に特化したLv.8盾"},
+	{"id": "moon_iron_9", "name": "天鉄の要塞盾", "cost": 43, "weight": 9, "resist": 9, "efficient": 0, "note": "上限耐性に特化したLv.9盾"},
+	{"id": "black_leather_9", "name": "竜革の守備盾", "cost": 52, "weight": 9, "resist": 0, "efficient": 9, "note": "省力化に特化したLv.9盾"},
+	{"id": "moon_iron_10", "name": "王鉄の要塞盾", "cost": 52, "weight": 10, "resist": 10, "efficient": 0, "note": "上限耐性に特化したLv.10盾"},
+	{"id": "black_leather_10", "name": "神獣の守備盾", "cost": 62, "weight": 10, "resist": 0, "efficient": 10, "note": "省力化に特化したLv.10盾"},
 	{"id": "resonance_break", "name": "砕岩の共鳴盾", "cost": 6, "weight": 1, "resist": 0, "efficient": 0, "resonance": "break", "note": "防御蓄積満タンで王女の次の一撃を強化"},
 	{"id": "resonance_swift", "name": "迅詠の共鳴盾", "cost": 6, "weight": 1, "resist": 0, "efficient": 0, "resonance": "swift", "note": "防御蓄積満タンで王女の次の詠唱を短縮"},
 	{"id": "resonance_ward", "name": "守りの共鳴盾", "cost": 7, "weight": 1, "resist": 0, "efficient": 0, "resonance": "ward", "note": "防御蓄積満タンで次の被弾を大幅軽減"},
@@ -67,9 +83,18 @@ const SHIELDS := [
 ]
 
 const WANDS := [
-	{"id": "apprentice", "name": "旅の魔術杖", "cost": 0, "period": 3.0, "damage": 12.0, "note": "標準的な詠唱と採掘力"},
-	{"id": "swift_spark", "name": "星火の短杖", "cost": 6, "period": 1.8, "damage": 5.8, "note": "短詠唱・低DPSの安定型"},
-	{"id": "piercing_core", "name": "穿孔の長杖", "cost": 10, "period": 4.8, "damage": 26.0, "note": "長詠唱・高DPSの重採掘型"},
+	{"id": "apprentice", "name": "旅の魔術杖", "cost": 0, "period": 3.0, "flight": 1.56, "damage": 12.0, "note": "Lv.1　標準的な詠唱と採掘力"},
+	{"id": "moon_spark", "name": "月火の魔術杖", "cost": 4, "period": 3.3, "flight": 1.20, "damage": 17.0, "note": "Lv.2　重い魔法ほど速く届く"},
+	{"id": "azure_focus", "name": "蒼焦の魔術杖", "cost": 7, "period": 3.7, "flight": 1.02, "damage": 24.0, "note": "Lv.3　高威力の高速弾"},
+	{"id": "comet_rod", "name": "彗星の魔術杖", "cost": 11, "period": 4.0, "flight": 0.84, "damage": 33.0, "note": "Lv.4　長詠唱・高速の一撃"},
+	{"id": "starcore_staff", "name": "星核の魔術杖", "cost": 16, "period": 4.3, "flight": 0.70, "damage": 44.0, "note": "Lv.5　鉱脈を深く穿つ"},
+	{"id": "deep_orbit", "name": "深環の魔術杖", "cost": 22, "period": 4.6, "flight": 0.60, "damage": 57.0, "note": "Lv.6　重い魔法が素早く飛ぶ"},
+	{"id": "crystal_lance", "name": "晶槍の魔術杖", "cost": 29, "period": 4.9, "flight": 0.52, "damage": 72.0, "note": "Lv.7　高リスクの貫通魔法"},
+	{"id": "meteor_staff", "name": "流星の魔術杖", "cost": 37, "period": 5.2, "flight": 0.45, "damage": 89.0, "note": "Lv.8　命中すれば大きく採掘"},
+	{"id": "royal_aster", "name": "王星の魔術杖", "cost": 46, "period": 5.5, "flight": 0.39, "damage": 108.0, "note": "Lv.9　王家に伝わる重魔法"},
+	{"id": "sovereign_core", "name": "天芯の魔術杖", "cost": 56, "period": 5.8, "flight": 0.34, "damage": 130.0, "note": "Lv.10　最も重く、最も速い一撃"},
+	{"id": "swift_spark", "name": "星火の短杖", "cost": 6, "period": 1.8, "flight": 0.55, "damage": 5.8, "note": "派生杖　短詠唱・低DPSの安定型"},
+	{"id": "piercing_core", "name": "穿孔の長杖", "cost": 10, "period": 4.8, "flight": 0.58, "damage": 26.0, "note": "派生杖　長詠唱・高DPSの重採掘型"},
 ]
 
 const COLLECTION_PER_PAGE := 5
@@ -331,9 +356,8 @@ func _princess_magic_hit() -> void:
 	princess_impact_time = 0.32
 
 func _begin_princess_chant() -> void:
-	# 砕岩共鳴は満タン時点で王女に付与され、次の詠唱開始時に一発へ固定する。
+	# 王女に付与済みの砕岩共鳴を、次の詠唱の一発へ固定する。
 	if resonance_ready and _resonance_type() == "break":
-		resonance_charge = 0.0
 		resonance_ready = false
 		princess_cast_empowered = true
 		resonance_flash = 0.48
@@ -341,11 +365,19 @@ func _begin_princess_chant() -> void:
 		_play_sound(620.0, 0.18, 0.03, 0.15)
 
 func _princess_cast_period() -> float:
-	var period := float(_wand_data(equipped_wand)["period"])
-	return period * 0.58 if resonance_ready and _resonance_type() == "swift" else period
+	return _princess_chant_duration() + _princess_flight_duration()
+
+func _princess_chant_duration() -> float:
+	var duration := float(_wand_data(equipped_wand)["period"]) * PRINCESS_CHANT_RATIO
+	return duration * 0.58 if resonance_ready and _resonance_type() == "swift" else duration
+
+func _princess_flight_duration() -> float:
+	var wand := _wand_data(equipped_wand)
+	var duration := float(wand.get("flight", float(wand["period"]) * (1.0 - PRINCESS_CHANT_RATIO)))
+	return duration * 0.58 if resonance_ready and _resonance_type() == "swift" else duration
 
 func _princess_is_chanting() -> bool:
-	return princess_cast_clock < _princess_cast_period() * PRINCESS_CHANT_RATIO
+	return princess_cast_clock < _princess_chant_duration()
 
 func _resonance_type() -> String:
 	return str(_shield_data(equipped_shield).get("resonance", ""))
@@ -386,6 +418,9 @@ func _charge_resonance(guard_power: float) -> bool:
 			_play_sound(720.0, 0.26, 0.02, 0.10)
 			return true
 		resonance_ready = true
+		if _resonance_type() == "break":
+			# The gauge's energy is spent now; the state moves to the princess.
+			resonance_charge = 0.0
 		resonance_flash = 0.62
 		message = "砕岩共鳴が王女に宿った — 次の詠唱を強化" if _resonance_type() == "break" else "%sが発動 — 次の効果を待機" % _resonance_name()
 		_play_sound(680.0, 0.22, 0.02, 0.18)
@@ -489,6 +524,14 @@ func _block() -> void:
 
 func _damage_princess(damage: int) -> void:
 	var chanting := _princess_is_chanting()
+	var attached_break_buff := resonance_ready and _resonance_type() == "break"
+	var empowered_cancelled := princess_cast_empowered or attached_break_buff
+	if empowered_cancelled:
+		# A direct hit disperses the princess's stored energy whether she has begun the spell or not.
+		princess_cast_empowered = false
+		if attached_break_buff:
+			_clear_resonance()
+		resonance_flash = 0.34
 	princess_hp = max(0, princess_hp - damage)
 	flash = 0.24
 	# A descending noisy thud makes an unblocked hit immediately recognizable.
@@ -497,8 +540,6 @@ func _damage_princess(damage: int) -> void:
 		_finish(false, "王女が倒れた")
 	elif chanting:
 		# A hit breaks the spell before it is released; the next spell must be chanted from the start.
-		var empowered_cancelled := princess_cast_empowered
-		princess_cast_empowered = false
 		princess_cast_clock = 0.0
 		princess_cast_cancel_time = 0.56
 		message = "王女が被弾 — 強化詠唱が中断された" if empowered_cancelled else "王女が被弾 — 詠唱が中断された"
@@ -653,7 +694,9 @@ func _equip_shield(id: String) -> void:
 	_show_dialog("盾を装備した", "%s\n%s\n次の戦闘リザルトで保存されます。" % [str(shield["name"]), _shield_stats_text(shield)])
 
 func _wand_stats_text(wand: Dictionary) -> String:
-	return "詠唱 %.1f秒　威力 %.1f　DPS %.1f" % [float(wand["period"]) * PRINCESS_CHANT_RATIO, float(wand["damage"]), float(wand["damage"]) / float(wand["period"])]
+	var chant := float(wand["period"]) * PRINCESS_CHANT_RATIO
+	var flight := float(wand.get("flight", float(wand["period"]) * (1.0 - PRINCESS_CHANT_RATIO)))
+	return "詠唱 %.1f秒　飛翔 %.2f秒　威力 %.1f　DPS %.1f" % [chant, flight, float(wand["damage"]), float(wand["damage"]) / (chant + flight)]
 
 func _buy_wand(id: String) -> void:
 	var wand := _wand_data(id)
@@ -752,10 +795,18 @@ func _input(event: InputEvent) -> void:
 				home_panel = HomePanel.MAIN
 			return
 		if home_panel == HomePanel.WAND_EQUIPMENT:
-			for index in range(owned_wands.size()):
-				if Rect2(24, 370 + index * 62, 384, 56).has_point(pos):
+			var wand_start := wand_equipment_page * COLLECTION_PER_PAGE
+			var wand_end := mini(owned_wands.size(), wand_start + COLLECTION_PER_PAGE)
+			for index in range(wand_start, wand_end):
+				if Rect2(24, 370 + (index - wand_start) * 47, 384, 43).has_point(pos):
 					_equip_wand(str(owned_wands[index]))
 					return
+			if Rect2(24, 620, 186, 40).has_point(pos) and wand_equipment_page > 0:
+				wand_equipment_page -= 1
+				return
+			if Rect2(222, 620, 186, 40).has_point(pos) and wand_equipment_page < _page_count(owned_wands.size()) - 1:
+				wand_equipment_page += 1
+				return
 			if Rect2(24, 670, 384, 42).has_point(pos):
 				home_panel = HomePanel.MAIN
 			return
@@ -779,8 +830,10 @@ func _input(event: InputEvent) -> void:
 			message = "鉱石を使って新しい盾を作ろう"
 		elif Rect2(20, 616, 186, 52).has_point(pos):
 			home_panel = HomePanel.WAND_EQUIPMENT
+			wand_equipment_page = 0
 		elif Rect2(226, 616, 186, 52).has_point(pos):
 			mode = Mode.WANDER
+			wand_shop_page = 0
 			message = "王女のための杖を選ぼう"
 		return
 	if mode == Mode.ARMORER:
@@ -801,10 +854,19 @@ func _input(event: InputEvent) -> void:
 			mode = Mode.HOME
 		return
 	if mode == Mode.WANDER:
-		for index in range(1, WANDS.size()):
-			if Rect2(24, 382 + (index - 1) * 90, 384, 78).has_point(pos):
+		var shop_start := 1 + wand_shop_page * COLLECTION_PER_PAGE
+		var shop_end := mini(WANDS.size(), shop_start + COLLECTION_PER_PAGE)
+		for index in range(shop_start, shop_end):
+			if Rect2(24, 378 + (index - shop_start) * 47, 384, 43).has_point(pos):
 				_buy_wand(str(WANDS[index]["id"]))
 				return
+		var shop_count := WANDS.size() - 1
+		if Rect2(24, 620, 186, 40).has_point(pos) and wand_shop_page > 0:
+			wand_shop_page -= 1
+			return
+		if Rect2(222, 620, 186, 40).has_point(pos) and wand_shop_page < _page_count(shop_count) - 1:
+			wand_shop_page += 1
+			return
 		if Rect2(24, 670, 384, 42).has_point(pos):
 			mode = Mode.HOME
 		return
@@ -816,8 +878,8 @@ func _input(event: InputEvent) -> void:
 		shield_drop_speed = 0.0
 		shield_ground_impact = 0.0
 		var shield_weight := float(_shield_data(equipped_shield)["weight"])
-		# Weight tiers 1/2/3 map to modest timing factors 1.0/1.125/1.25.
-		var weight_factor := 1.0 + (shield_weight - 1.0) * 0.125
+		# Even the Lv.10 shields stay usable; their weight raises the time by at most 50%.
+		var weight_factor := 1.0 + (shield_weight - 1.0) * 0.055
 		raise_total = maxf(0.08, 0.18 + (1.0 - cap / base_cap) * 0.52) * weight_factor
 		raising_time = raise_total
 
@@ -994,32 +1056,43 @@ func _draw_wand_equipment() -> void:
 	draw_string(JP_FONT, Vector2(38, 78), "杖で詠唱時間・一撃・DPSが変わります。", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("e1c9ff"))
 	draw_string(JP_FONT, Vector2(38, 100), "変更は、次の戦闘リザルトで保存されます。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f2d092"))
 	draw_rect(Rect2(18, 346, 396, 300), Color(0.03, 0.02, 0.09, 0.84), true)
-	for index in range(owned_wands.size()):
+	var wand_start := wand_equipment_page * COLLECTION_PER_PAGE
+	var wand_end := mini(owned_wands.size(), wand_start + COLLECTION_PER_PAGE)
+	for index in range(wand_start, wand_end):
 		var wand := _wand_data(str(owned_wands[index]))
 		var equipped := str(owned_wands[index]) == equipped_wand
 		var label := "%s　%s" % [str(wand["name"]), _wand_stats_text(wand)]
 		if equipped:
 			label += "　【装備中】"
-		_button(Rect2(24, 370 + index * 62, 384, 56), label, Color("76558b") if equipped else Color("5a4872"))
+		_button(Rect2(24, 370 + (index - wand_start) * 47, 384, 43), label, Color("76558b") if equipped else Color("5a4872"))
+	var wand_pages := _page_count(owned_wands.size())
+	_button(Rect2(24, 620, 186, 40), "前のページ", Color("3e4a61") if wand_equipment_page > 0 else Color("293846"))
+	_button(Rect2(222, 620, 186, 40), "次のページ", Color("3e4a61") if wand_equipment_page < wand_pages - 1 else Color("293846"))
+	draw_string(JP_FONT, Vector2(184, 645), "%d / %d" % [wand_equipment_page + 1, wand_pages], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("d9e5ff"))
 	_button(Rect2(24, 670, 384, 42), "戻る", Color("3e4a61"))
 
 func _draw_wander() -> void:
 	draw_rect(Rect2(18, 18, 396, 90), Color(0.10, 0.04, 0.14, 0.88), true)
 	draw_string(JP_FONT, Vector2(38, 50), "夜の杖屋", HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color.WHITE)
 	draw_string(JP_FONT, Vector2(38, 77), "鉱石 %d　　王女の戦い方を選ぶ" % ore, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("f2d092"))
-	draw_string(JP_FONT, Vector2(38, 100), "長詠唱ほど被弾リスクは高いが、DPSも上がる。", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("e1c9ff"))
+	draw_string(JP_FONT, Vector2(38, 100), "高威力ほど長詠唱。ただし魔法弾は速く届く。", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("e1c9ff"))
 	draw_rect(Rect2(18, 346, 396, 300), Color(0.03, 0.02, 0.09, 0.84), true)
-	for index in range(1, WANDS.size()):
+	var shop_start := 1 + wand_shop_page * COLLECTION_PER_PAGE
+	var shop_end := mini(WANDS.size(), shop_start + COLLECTION_PER_PAGE)
+	for index in range(shop_start, shop_end):
 		var wand: Dictionary = WANDS[index]
 		var id := str(wand["id"])
 		var owned := owned_wands.has(id)
-		var rect := Rect2(24, 382 + (index - 1) * 90, 384, 78)
+		var rect := Rect2(24, 378 + (index - shop_start) * 47, 384, 43)
 		draw_rect(rect, Color("6c456b") if not owned else Color("435562"), true)
 		draw_rect(rect, Color("d8b8ee"), false, 1.0)
 		var status := "所持済み" if owned else "鉱石 %d" % int(wand["cost"])
-		draw_string(JP_FONT, Vector2(36, rect.position.y + 24), "%s　%s" % [str(wand["name"]), status], HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color.WHITE)
-		draw_string(JP_FONT, Vector2(36, rect.position.y + 46), _wand_stats_text(wand), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("e1c9ff"))
-		draw_string(JP_FONT, Vector2(36, rect.position.y + 66), str(wand["note"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("d9e5ff"))
+		draw_string(JP_FONT, Vector2(34, rect.position.y + 17), "%s　%s" % [str(wand["name"]), status], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color.WHITE)
+		draw_string(JP_FONT, Vector2(34, rect.position.y + 34), _wand_stats_text(wand), HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color("e1c9ff"))
+	var shop_pages := _page_count(WANDS.size() - 1)
+	_button(Rect2(24, 620, 186, 40), "前の5種", Color("3e4a61") if wand_shop_page > 0 else Color("293846"))
+	_button(Rect2(222, 620, 186, 40), "次の5種", Color("3e4a61") if wand_shop_page < shop_pages - 1 else Color("293846"))
+	draw_string(JP_FONT, Vector2(184, 645), "%d / %d" % [wand_shop_page + 1, shop_pages], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("d9e5ff"))
 	_button(Rect2(24, 670, 384, 42), "自室へ戻る", Color("3e4a61"))
 
 func _draw_armorer() -> void:
@@ -1049,14 +1122,15 @@ func _draw_armorer() -> void:
 	_button(Rect2(24, 674, 384, 42), "自室へ戻る", Color("3e4a61"))
 
 func _draw_princess_attack() -> void:
-	var cycle_t := princess_cast_clock / _princess_cast_period()
+	var chant_duration := _princess_chant_duration()
+	var flight_duration := _princess_flight_duration()
 	if resonance_ready and _resonance_type() == "break":
 		var aura_radius := 38.0 + sin(battle_clock * 5.0) * 5.0
 		draw_circle(PRINCESS_CAST, aura_radius, Color(1.0, 0.66, 0.28, 0.13))
 		draw_arc(PRINCESS_CAST, aura_radius, battle_clock * 2.0, battle_clock * 2.0 + TAU * 0.72, 24, Color("ffbd6a"), 2.0, true)
 		draw_string(JP_FONT, PRINCESS_CAST + Vector2(-42, -aura_radius - 12), "砕岩共鳴 付与中", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("ffd394"))
-	if cycle_t < PRINCESS_CHANT_RATIO:
-		var chant_t := cycle_t / PRINCESS_CHANT_RATIO
+	if princess_cast_clock < chant_duration:
+		var chant_t := princess_cast_clock / chant_duration
 		var cast_radius := 22.0 + chant_t * 33.0
 		var spin := battle_clock * 4.0
 		var chant_color := Color("ffb35f") if princess_cast_empowered else Color(0.58, 0.25, 0.96, 0.06 + chant_t * 0.10)
@@ -1069,7 +1143,7 @@ func _draw_princess_attack() -> void:
 			draw_circle(spark, 2.0 + chant_t * 2.0, Color("ead7ff"))
 		draw_string(JP_FONT, PRINCESS_CAST + Vector2(-43, -cast_radius - 14), "強化詠唱中" if princess_cast_empowered else "詠唱中", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("ffd394") if princess_cast_empowered else Color("efd9ff"))
 	else:
-		var shot_t := (cycle_t - PRINCESS_CHANT_RATIO) / (1.0 - PRINCESS_CHANT_RATIO)
+		var shot_t := clampf((princess_cast_clock - chant_duration) / flight_duration, 0.0, 1.0)
 		var trail := PackedVector2Array()
 		for index in range(18):
 			var t := shot_t * float(index) / 17.0
@@ -1189,6 +1263,9 @@ func _resonance_color() -> Color:
 func _draw_resonance_effect(shield_pos: Vector2, shield_radius: float) -> void:
 	if _resonance_type().is_empty() or shield_lift < 0.92:
 		return
+	# 砕岩共鳴は満タン時点で王女へ移るため、盾側には待機エフェクトを残さない。
+	if resonance_ready and _resonance_type() == "break":
+		return
 	var color := _resonance_color()
 	var charge_ratio := resonance_charge / RESONANCE_GUARD_GOAL
 	var ring_radius := shield_radius + 12.0 + charge_ratio * 17.0
@@ -1223,7 +1300,7 @@ func _draw_hud() -> void:
 			resonance_status = "砕岩共鳴 強化詠唱中"
 		draw_string(JP_FONT, Vector2(238, 76), resonance_status, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, _resonance_color())
 		draw_rect(Rect2(238, 80, 166, 5), Color("102038"), true)
-		var meter_ratio := 1.0 if resonance_ready or princess_cast_empowered else resonance_charge / RESONANCE_GUARD_GOAL
+		var meter_ratio := 1.0 if (resonance_ready and _resonance_type() != "break") or princess_cast_empowered else resonance_charge / RESONANCE_GUARD_GOAL
 		draw_rect(Rect2(238, 80, 166 * meter_ratio, 5), _resonance_color(), true)
 	draw_rect(Rect2(16, 731, 400, 25), Color(0.02, 0.04, 0.10, 0.84), true)
 	draw_string(JP_FONT, Vector2(28, 749), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("e8f1ff"))
