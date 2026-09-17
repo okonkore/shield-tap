@@ -22,6 +22,8 @@ const PRINCESS_CAST_PERIOD := 3.0
 const PRINCESS_CHANT_RATIO := 0.48
 const RECALL_CHANT_DURATION := 5.2
 const SHIELD_POINT_BONUS := 0.18
+const RESONANCE_GUARD_GOAL := 45.0
+const PRINCESS_HP_MAX := 5
 
 enum Mode { TITLE, HOME, ARMORER, BATTLE, RECALL, DOWNED, RESULTS }
 enum TitlePanel { MAIN, CONTINUE, NEW_GAME }
@@ -56,9 +58,10 @@ const SHIELDS := [
 	{"id": "black_leather_2", "name": "黒革の塔盾", "cost": 8, "weight": 2, "resist": 0, "efficient": 2, "note": "省力化に特化したLv.2盾"},
 	{"id": "moon_iron_3", "name": "月鉄の城壁盾", "cost": 9, "weight": 3, "resist": 3, "efficient": 0, "note": "上限耐性に特化したLv.3盾"},
 	{"id": "black_leather_3", "name": "黒革の城砦盾", "cost": 12, "weight": 3, "resist": 0, "efficient": 3, "note": "省力化に特化したLv.3盾"},
-	{"id": "resonance_break", "name": "砕岩の共鳴盾", "cost": 6, "weight": 1, "resist": 0, "efficient": 0, "resonance": "break", "note": "3秒維持で王女の次の一撃を強化"},
-	{"id": "resonance_swift", "name": "迅詠の共鳴盾", "cost": 6, "weight": 1, "resist": 0, "efficient": 0, "resonance": "swift", "note": "3秒維持で王女の次の詠唱を短縮"},
-	{"id": "resonance_ward", "name": "守りの共鳴盾", "cost": 7, "weight": 1, "resist": 0, "efficient": 0, "resonance": "ward", "note": "3秒維持で次の被弾を大幅軽減"},
+	{"id": "resonance_break", "name": "砕岩の共鳴盾", "cost": 6, "weight": 1, "resist": 0, "efficient": 0, "resonance": "break", "note": "防御蓄積満タンで王女の次の一撃を強化"},
+	{"id": "resonance_swift", "name": "迅詠の共鳴盾", "cost": 6, "weight": 1, "resist": 0, "efficient": 0, "resonance": "swift", "note": "防御蓄積満タンで王女の次の詠唱を短縮"},
+	{"id": "resonance_ward", "name": "守りの共鳴盾", "cost": 7, "weight": 1, "resist": 0, "efficient": 0, "resonance": "ward", "note": "防御蓄積満タンで次の被弾を大幅軽減"},
+	{"id": "resonance_mend", "name": "命脈の共鳴盾", "cost": 8, "weight": 1, "resist": 0, "efficient": 0, "resonance": "mend", "note": "防御蓄積満タンで王女のHPを25%回復"},
 ]
 
 const COLLECTION_PER_PAGE := 5
@@ -317,6 +320,7 @@ func _resonance_label(resonance: String) -> String:
 		"break": return "砕岩共鳴"
 		"swift": return "迅詠共鳴"
 		"ward": return "守りの共鳴"
+		"mend": return "命脈共鳴"
 	return ""
 
 func _clear_resonance() -> void:
@@ -330,15 +334,25 @@ func _consume_resonance(note: String) -> void:
 	message = note
 	_play_sound(470.0, 0.18, 0.05, -0.28)
 
-func _charge_resonance(delta: float) -> void:
+func _charge_resonance(guard_power: float) -> bool:
 	if _resonance_type().is_empty() or resonance_ready:
-		return
-	resonance_charge = minf(3.0, resonance_charge + delta)
-	if resonance_charge >= 3.0:
+		return false
+	resonance_charge = minf(RESONANCE_GUARD_GOAL, resonance_charge + guard_power)
+	if resonance_charge >= RESONANCE_GUARD_GOAL:
+		if _resonance_type() == "mend":
+			var recovered := maxi(1, int(ceil(float(PRINCESS_HP_MAX) * 0.25)))
+			princess_hp = mini(PRINCESS_HP_MAX, princess_hp + recovered)
+			resonance_charge = 0.0
+			resonance_flash = 0.62
+			message = "命脈共鳴が発動 — 王女HP +%d" % recovered
+			_play_sound(720.0, 0.26, 0.02, 0.10)
+			return true
 		resonance_ready = true
 		resonance_flash = 0.62
 		message = "%sが発動 — 次の効果を待機" % _resonance_name()
 		_play_sound(680.0, 0.22, 0.02, 0.18)
+		return true
+	return false
 
 func _update_guard(delta: float) -> void:
 	if held and not guarding:
@@ -356,14 +370,12 @@ func _update_guard(delta: float) -> void:
 		_drop_shield(delta)
 	if guarding:
 		shield_lift = 1.0
-		_charge_resonance(delta)
 		stamina = maxf(0.0, stamina - 17.0 * (1.0 - efficiency * SHIELD_POINT_BONUS) * delta)
 		if stamina <= 0.0:
 			guarding = false
 			held = false
 			exhausted_time = 2.0
 	else:
-		_clear_resonance()
 		stamina = minf(cap, stamina + 24.0 * delta)
 
 func _drop_shield(delta: float) -> void:
@@ -421,11 +433,14 @@ func _block() -> void:
 	# Training follows the enemy's original attack power, not the shield's mitigated damage.
 	run_xp += attack_power
 	blocks += 1
+	var skill_activated := _charge_resonance(attack_power)
 	if blocks >= 4:
 		recall_ready = true
 	flash = 0.18
 	_play_guard_sound()
 	message = "防御 %d回　経験値 +%d（累計 %d）" % [blocks, int(attack_power), int(run_xp)]
+	if skill_activated:
+		message += "　%s発動" % _resonance_name()
 	if cap <= 0.0:
 		mode = Mode.DOWNED
 		message = "腕が限界だ — 王女が一人で戦う"
@@ -454,7 +469,7 @@ func _start_expedition() -> void:
 	mode = Mode.BATTLE
 	boss_hp_max = float(_boss_data()["hp"])
 	boss_hp = boss_hp_max
-	princess_hp = 5
+	princess_hp = PRINCESS_HP_MAX
 	cap = base_cap
 	stamina = cap
 	blocks = 0
@@ -1019,13 +1034,14 @@ func _resonance_color() -> Color:
 		"break": return Color("ffb35f")
 		"swift": return Color("b890ff")
 		"ward": return Color("78e7d2")
+		"mend": return Color("ff8fb5")
 	return Color.TRANSPARENT
 
 func _draw_resonance_effect(shield_pos: Vector2, shield_radius: float) -> void:
 	if _resonance_type().is_empty() or shield_lift < 0.92:
 		return
 	var color := _resonance_color()
-	var charge_ratio := resonance_charge / 3.0
+	var charge_ratio := resonance_charge / RESONANCE_GUARD_GOAL
 	var ring_radius := shield_radius + 12.0 + charge_ratio * 17.0
 	var spin := battle_clock * (2.3 if resonance_ready else 1.1)
 	draw_circle(shield_pos, ring_radius, Color(color, 0.045 + charge_ratio * 0.06))
@@ -1040,7 +1056,7 @@ func _draw_resonance_effect(shield_pos: Vector2, shield_radius: float) -> void:
 		draw_circle(shield_pos, ring_radius + (1.0 - resonance_flash / 0.62) * 34.0, Color(color, 0.38 * resonance_flash / 0.62))
 
 func _draw_hud() -> void:
-	draw_rect(Rect2(16, 18, 400, 158), Color(0.02, 0.04, 0.10, 0.84), true)
+	draw_rect(Rect2(16, 18, 400, 176), Color(0.02, 0.04, 0.10, 0.84), true)
 	draw_string(JP_FONT, Vector2(32, 44), str(_boss_data()["name"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color.WHITE)
 	draw_rect(Rect2(32, 53, 240, 10), Color("2c2940"), true)
 	draw_rect(Rect2(32, 53, 240 * boss_hp / boss_hp_max, 10), Color("d8709b"), true)
@@ -1055,8 +1071,12 @@ func _draw_hud() -> void:
 	var protected_cost := heavy_power * maxf(0.0, 1.0 - cap_resist * SHIELD_POINT_BONUS)
 	draw_string(JP_FONT, Vector2(32, 136), "重攻撃の上限減少　-%d → -%d" % [int(ceil(heavy_power)), int(ceil(protected_cost))], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("a9dff0"))
 	if not _resonance_type().is_empty():
-		var resonance_status := "%s 待機中" % _resonance_name() if resonance_ready else "%s 蓄積 %.1f / 3.0" % [_resonance_name(), resonance_charge]
+		var resonance_status := "%s 待機中" % _resonance_name() if resonance_ready else "%s 蓄積 %d / %d" % [_resonance_name(), int(resonance_charge), int(RESONANCE_GUARD_GOAL)]
 		draw_string(JP_FONT, Vector2(32, 160), resonance_status, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, _resonance_color())
+		draw_rect(Rect2(220, 151, 164, 9), Color("102038"), true)
+		var meter_ratio := 1.0 if resonance_ready else resonance_charge / RESONANCE_GUARD_GOAL
+		draw_rect(Rect2(220, 151, 164 * meter_ratio, 9), _resonance_color(), true)
+		draw_rect(Rect2(220, 151, 164, 9), Color("b7d6ec"), false, 1.0)
 	draw_rect(Rect2(16, 731, 400, 25), Color(0.02, 0.04, 0.10, 0.84), true)
 	draw_string(JP_FONT, Vector2(28, 749), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("e8f1ff"))
 	if recall_ready and mode == Mode.BATTLE:
