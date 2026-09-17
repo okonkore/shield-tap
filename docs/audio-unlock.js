@@ -8,6 +8,9 @@
 	const NativeAudioContext = window.AudioContext || window.webkitAudioContext;
 	let gameContext = null;
 	let confirmed = false;
+	const guardSound = new Audio('shield-tap-guard-pan-v1.mp3');
+	guardSound.preload = 'auto';
+	guardSound.volume = 0.72;
 	const wrap = (NativeAudioContext) => {
 		if (!NativeAudioContext) return NativeAudioContext;
 		function GestureAudioContext(...args) {
@@ -43,7 +46,13 @@
 		oscillator.start(now);
 		oscillator.stop(now + duration + 0.02);
 	};
-	window.shieldTapAudio = { play };
+	const playGuard = () => {
+		// A fresh element permits rapid consecutive blocks without cutting off the prior clang.
+		const sound = guardSound.cloneNode();
+		sound.volume = 0.72;
+		sound.play().catch(() => play(210, 0.16, 0.13, -0.12));
+	};
+	window.shieldTapAudio = { play, playGuard };
 	const unlock = () => {
 		for (const context of contexts) {
 			if (context.state !== 'running') context.resume().catch(() => {});

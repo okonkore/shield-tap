@@ -23,7 +23,7 @@ const PRINCESS_CHANT_RATIO := 0.48
 const RECALL_CHANT_DURATION := 5.2
 const SHIELD_POINT_BONUS := 0.18
 
-enum Mode { TITLE, HOME, ARMORER, BATTLE, RECALL, DOWNED }
+enum Mode { TITLE, HOME, ARMORER, BATTLE, RECALL, DOWNED, RESULTS }
 enum TitlePanel { MAIN, CONTINUE, NEW_GAME }
 enum HomePanel { MAIN, EQUIPMENT, BOSS_SELECT }
 const SAVE_KEY_PREFIX := "shield-tap-save-v2-"
@@ -35,7 +35,6 @@ var equipment_page := 0
 var armorer_page := 0
 var selected_slot := -1
 var save_slots: Array = []
-var needs_rest := false
 var selected_boss := "cracked"
 
 # Persistent progression. Values are deliberately simple for the first playable slice.
@@ -98,6 +97,11 @@ var princess_cast_cancel_time := 0.0
 var resonance_charge := 0.0
 var resonance_ready := false
 var resonance_flash := 0.0
+var result_title := ""
+var result_success := false
+var result_ore := 0
+var result_xp := 0
+var result_levels := 0
 var message := "出撃してゴーレムに挑もう"
 var dialog_visible := false
 var dialog_title := ""
@@ -185,7 +189,9 @@ func _load_save_slots() -> void:
 func _apply_save(data: Dictionary) -> void:
 	arm_level = int(data.get("arm_level", 1))
 	level_xp = float(data.get("level_xp", 0.0))
-	pending_xp = float(data.get("pending_xp", 0.0))
+	# Older saves stored earned experience until sleeping. Fold it into the permanent total on load.
+	pending_xp = 0.0
+	var legacy_pending_xp := float(data.get("pending_xp", 0.0))
 	ore = int(data.get("ore", 0))
 	base_cap = float(data.get("base_cap", 100.0))
 	var saved_shields = data.get("owned_shields", ["traveler"])
@@ -199,7 +205,7 @@ func _apply_save(data: Dictionary) -> void:
 	if not owned_shields.has(equipped_shield) or not _shield_exists(equipped_shield):
 		equipped_shield = "traveler"
 	_apply_shield_effects()
-	needs_rest = bool(data.get("needs_rest", false))
+	_grant_experience(legacy_pending_xp)
 
 func _continue_game(slot: int) -> void:
 	var data := _read_slot(slot)
@@ -215,9 +221,9 @@ func _save_progress() -> void:
 	if selected_slot < 0:
 		return
 	var data := {
-		"arm_level": arm_level, "level_xp": level_xp, "pending_xp": pending_xp,
+		"arm_level": arm_level, "level_xp": level_xp, "pending_xp": 0.0,
 		"ore": ore, "base_cap": base_cap, "owned_shields": owned_shields,
-		"equipped_shield": equipped_shield, "needs_rest": needs_rest,
+		"equipped_shield": equipped_shield,
 	}
 	if selected_slot < save_slots.size():
 		save_slots[selected_slot] = data
@@ -236,7 +242,6 @@ func _new_game(slot: int) -> void:
 	owned_shields = ["traveler"]
 	equipped_shield = "traveler"
 	_apply_shield_effects()
-	needs_rest = false
 	message = "出撃してゴーレムに挑もう"
 	mode = Mode.HOME
 	title_panel = TitlePanel.MAIN
@@ -419,8 +424,7 @@ func _block() -> void:
 	if blocks >= 4:
 		recall_ready = true
 	flash = 0.18
-	# A bright, short shield clang contrasts with the dull damage sound.
-	_play_sound(165.0 if attack_kind == "heavy" else 235.0, 0.14, 0.13, -0.12)
+	_play_guard_sound()
 	message = "防御 %d回　経験値 +%d（累計 %d）" % [blocks, int(attack_power), int(run_xp)]
 	if cap <= 0.0:
 		mode = Mode.DOWNED
@@ -447,10 +451,6 @@ func _damage_princess(damage: int) -> void:
 		message = "王女が被弾 — 盾で守れ"
 
 func _start_expedition() -> void:
-	if needs_rest:
-		message = "遠征から帰った。まず眠って休もう"
-		_show_dialog("休息が必要", "遠征から戻った後は、眠るまで再び出撃できません。")
-		return
 	mode = Mode.BATTLE
 	boss_hp_max = float(_boss_data()["hp"])
 	boss_hp = boss_hp_max
@@ -487,34 +487,30 @@ func _start_recall() -> void:
 		message = "帰還魔法を守れ"
 
 func _finish(success: bool, result: String) -> void:
+	result_title = result
+	result_success = success
+	result_ore = 0
+	result_xp = 0
+	result_levels = 0
 	if success:
 		ore += run_ore
-		pending_xp += run_xp
+		result_ore = run_ore
+		result_xp = int(run_xp)
+		result_levels = _grant_experience(run_xp)
 		message = "%s　鉱石 +%d　経験値 +%d" % [result, run_ore, int(run_xp)]
-		_show_dialog(result, "鉱石 +%d\n経験値 +%d\n眠ると記録されます。" % [run_ore, int(run_xp)])
 	else:
 		message = "%s　今回の戦利品を失った" % result
-		_show_dialog(result, "今回の戦利品と鍛錬は失われました。\n眠ると次の遠征へ出られます。")
-	needs_rest = true
-	mode = Mode.HOME
+	mode = Mode.RESULTS
 
-func _sleep() -> void:
-	var recovered_xp := pending_xp
-	level_xp += recovered_xp
-	pending_xp = 0.0
+func _grant_experience(amount: float) -> int:
+	level_xp += amount
 	var levels_gained := 0
 	while level_xp >= _need_xp():
 		level_xp -= _need_xp()
 		arm_level += 1
 		base_cap += 12.0
 		levels_gained += 1
-	needs_rest = false
-	message = "超回復！ 腕力 Lv.%d" % arm_level if levels_gained > 0 else ("休息を終えた" if recovered_xp <= 0.0 else "休息で鍛錬を吸収した")
-	_save_progress()
-	if levels_gained > 0:
-		_show_dialog("腕力レベルアップ！", "腕力 Lv.%d\n最大腕力 +%d\nセーブしました。" % [arm_level, levels_gained * 12])
-	else:
-		_show_dialog("休息を終えた", "鍛錬を吸収しました。\nセーブしました。")
+	return levels_gained
 
 func _need_xp() -> float:
 	return 70.0 + arm_level * 55.0
@@ -586,7 +582,7 @@ func _equip_shield(id: String) -> void:
 	var shield := _shield_data(id)
 	message = "%sを装備した" % str(shield["name"])
 	home_panel = HomePanel.MAIN
-	_show_dialog("盾を装備した", "%s\n%s\n眠ると記録されます。" % [str(shield["name"]), _shield_stats_text(shield)])
+	_show_dialog("盾を装備した", "%s\n%s\n次の戦闘リザルトで保存されます。" % [str(shield["name"]), _shield_stats_text(shield)])
 
 func _input(event: InputEvent) -> void:
 	var pressed := false
@@ -615,6 +611,13 @@ func _input(event: InputEvent) -> void:
 	_unlock_audio()
 	if dialog_visible:
 		dialog_visible = false
+		return
+	if mode == Mode.RESULTS:
+		if Rect2(40, 640, 352, 58).has_point(pos):
+			_save_progress()
+			message = "リザルトを記録した。次の遠征へ出られる"
+			home_panel = HomePanel.MAIN
+			mode = Mode.HOME
 		return
 	if mode == Mode.TITLE:
 		if title_panel == TitlePanel.MAIN:
@@ -664,14 +667,11 @@ func _input(event: InputEvent) -> void:
 				home_panel = HomePanel.MAIN
 			return
 		if Rect2(40, 505, 352, 58).has_point(pos):
-			if not needs_rest:
-				home_panel = HomePanel.BOSS_SELECT
-		elif Rect2(20, 575, 124, 58).has_point(pos):
-			_sleep()
-		elif Rect2(154, 575, 124, 58).has_point(pos):
+			home_panel = HomePanel.BOSS_SELECT
+		elif Rect2(20, 575, 186, 58).has_point(pos):
 			home_panel = HomePanel.EQUIPMENT
 			equipment_page = 0
-		elif Rect2(288, 575, 124, 58).has_point(pos):
+		elif Rect2(226, 575, 186, 58).has_point(pos):
 			mode = Mode.ARMORER
 			armorer_page = 0
 			message = "鉱石を使って新しい盾を作ろう"
@@ -731,6 +731,13 @@ func _play_sound(freq: float, duration: float, noise: float, drop: float) -> voi
 	tone_noise = noise
 	tone_drop = drop
 
+func _play_guard_sound() -> void:
+	if OS.has_feature("web"):
+		JavaScriptBridge.eval("window.shieldTapAudio&&window.shieldTapAudio.playGuard()", true)
+		return
+	# The provided MP3 is served in the Web build; retain the synthetic clang for local editor runs.
+	_play_sound(210.0, 0.16, 0.13, -0.12)
+
 func _fill_audio() -> void:
 	if audio_playback == null:
 		return
@@ -761,6 +768,9 @@ func _draw() -> void:
 		_draw_home()
 	elif mode == Mode.ARMORER:
 		_draw_armorer()
+	elif mode == Mode.RESULTS:
+		_draw_battle()
+		_draw_results()
 	else:
 		_draw_battle()
 	if dialog_visible:
@@ -771,7 +781,7 @@ func _draw_title() -> void:
 	draw_string(JP_FONT, Vector2(62, 145), "護衛のリズム", HORIZONTAL_ALIGNMENT_LEFT, -1, 35, Color.WHITE)
 	draw_string(JP_FONT, Vector2(62, 180), "王女を守り、巨像に挑む。", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("d7c9f5"))
 	if title_panel == TitlePanel.MAIN:
-		draw_string(JP_FONT, Vector2(62, 218), "データは眠ったときに、この端末へ保存されます。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("a9bfdc"))
+		draw_string(JP_FONT, Vector2(62, 218), "戦闘リザルトで、この端末へ保存されます。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("a9bfdc"))
 		_button(Rect2(40, 390, 352, 58), "つづきから", Color("4d6680"))
 		_button(Rect2(40, 464, 352, 58), "はじめから", Color("76516f"))
 		return
@@ -804,22 +814,18 @@ func _draw_home() -> void:
 		return
 	draw_rect(Rect2(20, 22, 392, 92), Color(0.02, 0.04, 0.10, 0.86), true)
 	draw_string(JP_FONT, Vector2(40, 52), "護衛の仮宿", HORIZONTAL_ALIGNMENT_LEFT, -1, 21, Color.WHITE)
-	draw_string(JP_FONT, Vector2(40, 78), "腕力 Lv.%d    経験値 %d / %d    今回 +%d" % [arm_level, int(level_xp), int(_need_xp()), int(pending_xp)], HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("c9daf5"))
+	draw_string(JP_FONT, Vector2(40, 78), "腕力 Lv.%d    経験値 %d / %d" % [arm_level, int(level_xp), int(_need_xp())], HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("c9daf5"))
 	draw_string(JP_FONT, Vector2(40, 101), "鉱石 %d    最大腕力 %d" % [ore, int(base_cap)], HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("f2d092"))
 	draw_rect(Rect2(30, 370, 372, 112), Color(0.02, 0.04, 0.10, 0.78), true)
 	draw_string(JP_FONT, Vector2(48, 400), "巨大ゴーレムが町を包囲している", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
-	draw_string(JP_FONT, Vector2(48, 427), "王女を守り、鉱石を持ち帰り、眠って強くなる。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("c9daf5"))
+	draw_string(JP_FONT, Vector2(48, 427), "王女を守り、鉱石を持ち帰って強くなる。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("c9daf5"))
 	draw_string(JP_FONT, Vector2(48, 455), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f2a5c7"))
-	var expedition_color := Color("3a6384") if not needs_rest else Color("293846")
-	_button(Rect2(40, 505, 352, 58), "出撃先を選ぶ" if not needs_rest else "眠るまで出撃できない", expedition_color)
-	_button(Rect2(20, 575, 124, 58), "眠る", Color("4d5979"))
-	_button(Rect2(154, 575, 124, 58), "盾を装備", Color("536f7b"))
-	_button(Rect2(288, 575, 124, 58), "防具屋へ", Color("785a45"))
+	_button(Rect2(40, 505, 352, 58), "出撃先を選ぶ", Color("3a6384"))
+	_button(Rect2(20, 575, 186, 58), "盾を装備", Color("536f7b"))
+	_button(Rect2(226, 575, 186, 58), "防具屋へ", Color("785a45"))
 	var shield := _shield_data(equipped_shield)
 	draw_string(JP_FONT, Vector2(36, 662), "装備中：%s" % str(shield["name"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("f2d092"))
 	draw_string(JP_FONT, Vector2(36, 685), _shield_stats_text(shield), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("d9e5ff"))
-	if needs_rest:
-		draw_string(JP_FONT, Vector2(36, 711), "遠征後のため、眠ると次の出撃が可能になります。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f4c6d7"))
 
 func _draw_boss_select() -> void:
 	draw_rect(Rect2(18, 18, 396, 90), Color(0.02, 0.04, 0.10, 0.86), true)
@@ -842,7 +848,7 @@ func _draw_equipment() -> void:
 	draw_rect(Rect2(18, 18, 396, 90), Color(0.02, 0.04, 0.10, 0.86), true)
 	draw_string(JP_FONT, Vector2(38, 50), "盾の装備", HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color.WHITE)
 	draw_string(JP_FONT, Vector2(38, 78), "所持している盾を選んで装備します。", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("c9daf5"))
-	draw_string(JP_FONT, Vector2(38, 100), "変更は、眠ったときに保存されます。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f2d092"))
+	draw_string(JP_FONT, Vector2(38, 100), "変更は、次の戦闘リザルトで保存されます。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f2d092"))
 	draw_rect(Rect2(18, 354, 396, 300), Color(0.02, 0.04, 0.10, 0.84), true)
 	var owned_start := equipment_page * COLLECTION_PER_PAGE
 	var owned_end := mini(owned_shields.size(), owned_start + COLLECTION_PER_PAGE)
@@ -979,7 +985,34 @@ func _draw_battle() -> void:
 	if mode == Mode.DOWNED:
 		draw_circle(SHIELD + Vector2(0, 32), 30, Color(0.01, 0.02, 0.05, 0.62))
 		draw_string(JP_FONT, Vector2(58, 568), "力尽きた", HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color("f2a5c7"))
-	_draw_hud()
+		_draw_hud()
+
+func _draw_results() -> void:
+	draw_rect(Rect2(0, 0, W, H), Color(0.01, 0.02, 0.07, 0.72), true)
+	draw_rect(Rect2(24, 150, 384, 500), Color("14233a"), true)
+	draw_rect(Rect2(24, 150, 384, 500), Color("b7d6ec"), false, 2.0)
+	var heading := "遠征成功" if result_success else "遠征失敗"
+	var heading_color := Color("f2d092") if result_success else Color("f2a5c7")
+	draw_string(JP_FONT, Vector2(52, 205), heading, HORIZONTAL_ALIGNMENT_LEFT, -1, 29, heading_color)
+	draw_string(JP_FONT, Vector2(52, 239), result_title, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("d9e5ff"))
+	draw_rect(Rect2(48, 267, 336, 1), Color("6f8ba5"), true)
+	if result_success:
+		draw_string(JP_FONT, Vector2(56, 315), "獲得した鉱石", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("c9daf5"))
+		draw_string(JP_FONT, Vector2(322, 315), "+%d" % result_ore, HORIZONTAL_ALIGNMENT_RIGHT, 54, 23, Color("f2d092"))
+		draw_string(JP_FONT, Vector2(56, 366), "獲得した経験値", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("c9daf5"))
+		draw_string(JP_FONT, Vector2(322, 366), "+%d" % result_xp, HORIZONTAL_ALIGNMENT_RIGHT, 54, 23, Color("bce7ff"))
+		if result_levels > 0:
+			draw_string(JP_FONT, Vector2(56, 422), "腕力レベルアップ！  Lv.%d" % arm_level, HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color("f4cb78"))
+			draw_string(JP_FONT, Vector2(56, 448), "最大腕力 +%d" % (result_levels * 12), HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("d9e5ff"))
+		else:
+			draw_string(JP_FONT, Vector2(56, 422), "腕力 Lv.%d　経験値 %d / %d" % [arm_level, int(level_xp), int(_need_xp())], HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color("d9e5ff"))
+	else:
+		draw_string(JP_FONT, Vector2(56, 328), "王女は力尽き、遠征は失敗した。", HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color("f2c4d4"))
+		draw_string(JP_FONT, Vector2(56, 367), "今回獲得した鉱石・経験値は失われた。", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("d9e5ff"))
+		draw_string(JP_FONT, Vector2(56, 420), "失った鉱石　+0", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("a9bfdc"))
+		draw_string(JP_FONT, Vector2(56, 450), "失った経験値　+0", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("a9bfdc"))
+	draw_string(JP_FONT, Vector2(56, 555), "セーブ%dに現在の進行を記録します。" % (selected_slot + 1), HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("c9daf5"))
+	_button(Rect2(40, 640, 352, 58), "セーブして自室へ戻る", Color("4d6680"))
 
 func _resonance_color() -> Color:
 	match _resonance_type():
