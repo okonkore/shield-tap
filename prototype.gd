@@ -985,7 +985,7 @@ func _draw_battle() -> void:
 	if mode == Mode.DOWNED:
 		draw_circle(SHIELD + Vector2(0, 32), 30, Color(0.01, 0.02, 0.05, 0.62))
 		draw_string(JP_FONT, Vector2(58, 568), "力尽きた", HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color("f2a5c7"))
-		_draw_hud()
+	_draw_hud()
 
 func _draw_results() -> void:
 	draw_rect(Rect2(0, 0, W, H), Color(0.01, 0.02, 0.07, 0.72), true)
