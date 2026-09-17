@@ -23,11 +23,11 @@ const PRINCESS_CHANT_RATIO := 0.48
 const RECALL_CHANT_DURATION := 5.2
 const SHIELD_POINT_BONUS := 0.18
 const RESONANCE_GUARD_GOAL := 45.0
-const PRINCESS_HP_MAX := 5
+const PRINCESS_HP_MAX := 50
 
-enum Mode { TITLE, HOME, ARMORER, BATTLE, RECALL, DOWNED, RESULTS }
+enum Mode { TITLE, HOME, ARMORER, WANDER, BATTLE, RECALL, DOWNED, RESULTS }
 enum TitlePanel { MAIN, CONTINUE, NEW_GAME }
-enum HomePanel { MAIN, EQUIPMENT, BOSS_SELECT }
+enum HomePanel { MAIN, EQUIPMENT, WAND_EQUIPMENT, BOSS_SELECT }
 const SAVE_KEY_PREFIX := "shield-tap-save-v2-"
 const SAVE_SLOT_COUNT := 3
 var mode := Mode.TITLE
@@ -49,6 +49,8 @@ var cap_resist := 0
 var efficiency := 0
 var owned_shields: Array = ["traveler"]
 var equipped_shield := "traveler"
+var owned_wands: Array = ["apprentice"]
+var equipped_wand := "apprentice"
 
 const SHIELDS := [
 	{"id": "traveler", "name": "旅人の盾", "cost": 0, "weight": 1, "resist": 0, "efficient": 0, "note": "使い込まれた最初の盾"},
@@ -64,6 +66,12 @@ const SHIELDS := [
 	{"id": "resonance_mend", "name": "命脈の共鳴盾", "cost": 8, "weight": 1, "resist": 0, "efficient": 0, "resonance": "mend", "note": "防御蓄積満タンで王女のHPを25%回復"},
 ]
 
+const WANDS := [
+	{"id": "apprentice", "name": "旅の魔術杖", "cost": 0, "period": 3.0, "damage": 12.0, "note": "標準的な詠唱と採掘力"},
+	{"id": "swift_spark", "name": "星火の短杖", "cost": 6, "period": 1.8, "damage": 5.8, "note": "短詠唱・低DPSの安定型"},
+	{"id": "piercing_core", "name": "穿孔の長杖", "cost": 10, "period": 4.8, "damage": 26.0, "note": "長詠唱・高DPSの重採掘型"},
+]
+
 const COLLECTION_PER_PAGE := 5
 
 # Expedition state. Boss health is reset on every departure.
@@ -71,7 +79,7 @@ var cap := 100.0
 var stamina := 100.0
 var boss_hp := 360.0
 var boss_hp_max := 360.0
-var princess_hp := 5
+var princess_hp := PRINCESS_HP_MAX
 var blocks := 0
 var run_ore := 0
 var mined_damage := 0.0
@@ -113,17 +121,17 @@ var last_press_msec := -1000
 var last_press_pos := Vector2(-999.0, -999.0)
 
 const PATTERN := [
-	{"kind": "stone", "wait": 0.70}, {"kind": "stone", "wait": 0.55},
-	{"kind": "volley", "wait": 0.35}, {"kind": "volley", "wait": 0.35},
-	{"kind": "heavy", "wait": 1.05}, {"kind": "stone", "wait": 0.65},
-	{"kind": "volley", "wait": 0.35}, {"kind": "heavy", "wait": 1.10},
+	{"kind": "stone", "wait": 0.34}, {"kind": "stone", "wait": 0.28},
+	{"kind": "volley", "wait": 0.18}, {"kind": "volley", "wait": 0.18},
+	{"kind": "heavy", "wait": 0.55}, {"kind": "stone", "wait": 0.30},
+	{"kind": "volley", "wait": 0.18}, {"kind": "heavy", "wait": 0.58},
 ]
 
 const FOUR_ARM_PATTERN := [
-	{"kind": "stone", "wait": 0.24}, {"kind": "volley", "wait": 0.15},
-	{"kind": "volley", "wait": 0.15}, {"kind": "stone", "wait": 0.20},
-	{"kind": "heavy", "wait": 0.48}, {"kind": "volley", "wait": 0.14},
-	{"kind": "volley", "wait": 0.14}, {"kind": "stone", "wait": 0.28},
+	{"kind": "stone", "wait": 0.12}, {"kind": "volley", "wait": 0.08},
+	{"kind": "volley", "wait": 0.08}, {"kind": "stone", "wait": 0.10},
+	{"kind": "heavy", "wait": 0.24}, {"kind": "volley", "wait": 0.08},
+	{"kind": "volley", "wait": 0.08}, {"kind": "stone", "wait": 0.14},
 ]
 
 const BOSSES := [
@@ -207,6 +215,16 @@ func _apply_save(data: Dictionary) -> void:
 	equipped_shield = str(data.get("equipped_shield", "traveler"))
 	if not owned_shields.has(equipped_shield) or not _shield_exists(equipped_shield):
 		equipped_shield = "traveler"
+	var saved_wands = data.get("owned_wands", ["apprentice"])
+	owned_wands = ["apprentice"]
+	if saved_wands is Array:
+		for wand_id in saved_wands:
+			var id := str(wand_id)
+			if id != "apprentice" and _wand_exists(id):
+				owned_wands.append(id)
+	equipped_wand = str(data.get("equipped_wand", "apprentice"))
+	if not owned_wands.has(equipped_wand) or not _wand_exists(equipped_wand):
+		equipped_wand = "apprentice"
 	_apply_shield_effects()
 	_grant_experience(legacy_pending_xp)
 
@@ -226,7 +244,8 @@ func _save_progress() -> void:
 	var data := {
 		"arm_level": arm_level, "level_xp": level_xp, "pending_xp": 0.0,
 		"ore": ore, "base_cap": base_cap, "owned_shields": owned_shields,
-		"equipped_shield": equipped_shield,
+		"equipped_shield": equipped_shield, "owned_wands": owned_wands,
+		"equipped_wand": equipped_wand,
 	}
 	if selected_slot < save_slots.size():
 		save_slots[selected_slot] = data
@@ -244,6 +263,8 @@ func _new_game(slot: int) -> void:
 	base_cap = 100.0
 	owned_shields = ["traveler"]
 	equipped_shield = "traveler"
+	owned_wands = ["apprentice"]
+	equipped_wand = "apprentice"
 	_apply_shield_effects()
 	message = "出撃してゴーレムに挑もう"
 	mode = Mode.HOME
@@ -288,8 +309,9 @@ func _process_expedition(delta: float) -> void:
 	_process_attack(delta)
 
 func _princess_magic_hit() -> void:
-	# A full chant culminates in one deliberate mining strike rather than continuous damage.
-	var magic_damage := 10.35 + arm_level * 0.66
+	# Each wand changes both the exposed chant time and the reward for completing it.
+	var wand := _wand_data(equipped_wand)
+	var magic_damage := float(wand["damage"]) * (1.0 + 0.064 * float(arm_level - 1))
 	if resonance_ready and _resonance_type() == "break":
 		magic_damage *= 1.85
 		_consume_resonance("砕岩共鳴が王女の一撃を強化")
@@ -304,7 +326,8 @@ func _princess_magic_hit() -> void:
 	princess_impact_time = 0.32
 
 func _princess_cast_period() -> float:
-	return 1.65 if resonance_ready and _resonance_type() == "swift" else PRINCESS_CAST_PERIOD
+	var period := float(_wand_data(equipped_wand)["period"])
+	return period * 0.58 if resonance_ready and _resonance_type() == "swift" else period
 
 func _princess_is_chanting() -> bool:
 	return princess_cast_clock < _princess_cast_period() * PRINCESS_CHANT_RATIO
@@ -408,7 +431,7 @@ func _start_attack() -> void:
 	attack_index = (attack_index + 1) % pattern.size()
 	attack_kind = str(entry["kind"])
 	var rapid := selected_boss == "four_arm"
-	attack_duration = (0.84 if rapid else 1.15) if attack_kind == "stone" else ((0.58 if rapid else 0.82) if attack_kind == "volley" else (1.18 if rapid else 1.45))
+	attack_duration = (0.58 if rapid else 0.76) if attack_kind == "stone" else ((0.34 if rapid else 0.46) if attack_kind == "volley" else (0.82 if rapid else 1.02))
 	attack_t = 0.0
 	attack_active = true
 
@@ -420,7 +443,7 @@ func _resolve_attack() -> void:
 	if mode != Mode.DOWNED and guarding:
 		_block()
 	else:
-		_damage_princess(2 if attack_kind == "heavy" else 1)
+		_damage_princess(7 if attack_kind == "heavy" else (3 if attack_kind == "stone" else 2))
 
 func _block() -> void:
 	var attack_power := _attack_power()
@@ -536,6 +559,18 @@ func _shield_data(id: String) -> Dictionary:
 			return shield
 	return SHIELDS[0]
 
+func _wand_data(id: String) -> Dictionary:
+	for wand in WANDS:
+		if str(wand["id"]) == id:
+			return wand
+	return WANDS[0]
+
+func _wand_exists(id: String) -> bool:
+	for wand in WANDS:
+		if str(wand["id"]) == id:
+			return true
+	return false
+
 func _boss_data() -> Dictionary:
 	for boss in BOSSES:
 		if str(boss["id"]) == selected_boss:
@@ -598,6 +633,32 @@ func _equip_shield(id: String) -> void:
 	message = "%sを装備した" % str(shield["name"])
 	home_panel = HomePanel.MAIN
 	_show_dialog("盾を装備した", "%s\n%s\n次の戦闘リザルトで保存されます。" % [str(shield["name"]), _shield_stats_text(shield)])
+
+func _wand_stats_text(wand: Dictionary) -> String:
+	return "詠唱 %.1f秒　威力 %.1f　DPS %.1f" % [float(wand["period"]) * PRINCESS_CHANT_RATIO, float(wand["damage"]), float(wand["damage"]) / float(wand["period"])]
+
+func _buy_wand(id: String) -> void:
+	var wand := _wand_data(id)
+	if owned_wands.has(id):
+		_show_dialog("すでに所持しています", "装備は自室で切り替えられます。")
+		return
+	var cost := int(wand["cost"])
+	if ore < cost:
+		_show_dialog("鉱石が足りない", "%sには鉱石 %d個が必要です。\n今は鉱石 %d個です。" % [str(wand["name"]), cost, ore])
+		return
+	ore -= cost
+	owned_wands.append(id)
+	message = "%sを購入した" % str(wand["name"])
+	_show_dialog("新しい杖を購入！", "%s\n%s\n装備は自室で切り替えられます。" % [str(wand["name"]), _wand_stats_text(wand)])
+
+func _equip_wand(id: String) -> void:
+	if not owned_wands.has(id):
+		return
+	equipped_wand = id
+	var wand := _wand_data(id)
+	message = "%sを王女に託した" % str(wand["name"])
+	home_panel = HomePanel.MAIN
+	_show_dialog("杖を装備した", "%s\n%s\n次の戦闘リザルトで保存されます。" % [str(wand["name"]), _wand_stats_text(wand)])
 
 func _input(event: InputEvent) -> void:
 	var pressed := false
@@ -672,6 +733,14 @@ func _input(event: InputEvent) -> void:
 			if Rect2(24, 670, 384, 42).has_point(pos):
 				home_panel = HomePanel.MAIN
 			return
+		if home_panel == HomePanel.WAND_EQUIPMENT:
+			for index in range(owned_wands.size()):
+				if Rect2(24, 370 + index * 62, 384, 56).has_point(pos):
+					_equip_wand(str(owned_wands[index]))
+					return
+			if Rect2(24, 670, 384, 42).has_point(pos):
+				home_panel = HomePanel.MAIN
+			return
 		if home_panel == HomePanel.BOSS_SELECT:
 			for index in range(BOSSES.size()):
 				if Rect2(24, 382 + index * 94, 384, 78).has_point(pos):
@@ -681,15 +750,20 @@ func _input(event: InputEvent) -> void:
 			if Rect2(24, 670, 384, 42).has_point(pos):
 				home_panel = HomePanel.MAIN
 			return
-		if Rect2(40, 505, 352, 58).has_point(pos):
+		if Rect2(40, 482, 352, 58).has_point(pos):
 			home_panel = HomePanel.BOSS_SELECT
-		elif Rect2(20, 575, 186, 58).has_point(pos):
+		elif Rect2(20, 552, 186, 52).has_point(pos):
 			home_panel = HomePanel.EQUIPMENT
 			equipment_page = 0
-		elif Rect2(226, 575, 186, 58).has_point(pos):
+		elif Rect2(226, 552, 186, 52).has_point(pos):
 			mode = Mode.ARMORER
 			armorer_page = 0
 			message = "鉱石を使って新しい盾を作ろう"
+		elif Rect2(20, 616, 186, 52).has_point(pos):
+			home_panel = HomePanel.WAND_EQUIPMENT
+		elif Rect2(226, 616, 186, 52).has_point(pos):
+			mode = Mode.WANDER
+			message = "王女のための杖を選ぼう"
 		return
 	if mode == Mode.ARMORER:
 		var recipe_start := 1 + armorer_page * COLLECTION_PER_PAGE
@@ -706,6 +780,14 @@ func _input(event: InputEvent) -> void:
 			armorer_page += 1
 			return
 		if Rect2(24, 674, 384, 42).has_point(pos):
+			mode = Mode.HOME
+		return
+	if mode == Mode.WANDER:
+		for index in range(1, WANDS.size()):
+			if Rect2(24, 382 + (index - 1) * 90, 384, 78).has_point(pos):
+				_buy_wand(str(WANDS[index]["id"]))
+				return
+		if Rect2(24, 670, 384, 42).has_point(pos):
 			mode = Mode.HOME
 		return
 	if mode == Mode.BATTLE and recall_ready and Rect2(282, 688, 130, 35).has_point(pos):
@@ -769,7 +851,7 @@ func _fill_audio() -> void:
 
 func _draw() -> void:
 	var background := ART
-	if mode in [Mode.TITLE, Mode.HOME]:
+	if mode in [Mode.TITLE, Mode.HOME, Mode.WANDER]:
 		background = HOME_ART
 	elif mode == Mode.ARMORER:
 		background = ARMORER_ART
@@ -783,6 +865,8 @@ func _draw() -> void:
 		_draw_home()
 	elif mode == Mode.ARMORER:
 		_draw_armorer()
+	elif mode == Mode.WANDER:
+		_draw_wander()
 	elif mode == Mode.RESULTS:
 		_draw_battle()
 		_draw_results()
@@ -824,6 +908,9 @@ func _draw_home() -> void:
 	if home_panel == HomePanel.EQUIPMENT:
 		_draw_equipment()
 		return
+	if home_panel == HomePanel.WAND_EQUIPMENT:
+		_draw_wand_equipment()
+		return
 	if home_panel == HomePanel.BOSS_SELECT:
 		_draw_boss_select()
 		return
@@ -835,12 +922,15 @@ func _draw_home() -> void:
 	draw_string(JP_FONT, Vector2(48, 400), "巨大ゴーレムが町を包囲している", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
 	draw_string(JP_FONT, Vector2(48, 427), "王女を守り、鉱石を持ち帰って強くなる。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("c9daf5"))
 	draw_string(JP_FONT, Vector2(48, 455), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f2a5c7"))
-	_button(Rect2(40, 505, 352, 58), "出撃先を選ぶ", Color("3a6384"))
-	_button(Rect2(20, 575, 186, 58), "盾を装備", Color("536f7b"))
-	_button(Rect2(226, 575, 186, 58), "防具屋へ", Color("785a45"))
+	_button(Rect2(40, 482, 352, 58), "出撃先を選ぶ", Color("3a6384"))
+	_button(Rect2(20, 552, 186, 52), "盾を装備", Color("536f7b"))
+	_button(Rect2(226, 552, 186, 52), "防具屋へ", Color("785a45"))
+	_button(Rect2(20, 616, 186, 52), "杖を装備", Color("66547f"))
+	_button(Rect2(226, 616, 186, 52), "杖屋へ", Color("7d4f72"))
 	var shield := _shield_data(equipped_shield)
-	draw_string(JP_FONT, Vector2(36, 662), "装備中：%s" % str(shield["name"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("f2d092"))
-	draw_string(JP_FONT, Vector2(36, 685), _shield_stats_text(shield), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("d9e5ff"))
+	var wand := _wand_data(equipped_wand)
+	draw_string(JP_FONT, Vector2(36, 700), "盾：%s　　杖：%s" % [str(shield["name"]), str(wand["name"])], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("f2d092"))
+	draw_string(JP_FONT, Vector2(36, 722), _wand_stats_text(wand), HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("d9e5ff"))
 
 func _draw_boss_select() -> void:
 	draw_rect(Rect2(18, 18, 396, 90), Color(0.02, 0.04, 0.10, 0.86), true)
@@ -879,6 +969,40 @@ func _draw_equipment() -> void:
 	_button(Rect2(222, 620, 186, 40), "次のページ", Color("3e4a61") if equipment_page < owned_pages - 1 else Color("293846"))
 	draw_string(JP_FONT, Vector2(184, 645), "%d / %d" % [equipment_page + 1, owned_pages], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("d9e5ff"))
 	_button(Rect2(24, 670, 384, 42), "戻る", Color("3e4a61"))
+
+func _draw_wand_equipment() -> void:
+	draw_rect(Rect2(18, 18, 396, 90), Color(0.08, 0.04, 0.14, 0.88), true)
+	draw_string(JP_FONT, Vector2(38, 50), "王女の杖", HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color.WHITE)
+	draw_string(JP_FONT, Vector2(38, 78), "杖で詠唱時間・一撃・DPSが変わります。", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("e1c9ff"))
+	draw_string(JP_FONT, Vector2(38, 100), "変更は、次の戦闘リザルトで保存されます。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f2d092"))
+	draw_rect(Rect2(18, 346, 396, 300), Color(0.03, 0.02, 0.09, 0.84), true)
+	for index in range(owned_wands.size()):
+		var wand := _wand_data(str(owned_wands[index]))
+		var equipped := str(owned_wands[index]) == equipped_wand
+		var label := "%s　%s" % [str(wand["name"]), _wand_stats_text(wand)]
+		if equipped:
+			label += "　【装備中】"
+		_button(Rect2(24, 370 + index * 62, 384, 56), label, Color("76558b") if equipped else Color("5a4872"))
+	_button(Rect2(24, 670, 384, 42), "戻る", Color("3e4a61"))
+
+func _draw_wander() -> void:
+	draw_rect(Rect2(18, 18, 396, 90), Color(0.10, 0.04, 0.14, 0.88), true)
+	draw_string(JP_FONT, Vector2(38, 50), "夜の杖屋", HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color.WHITE)
+	draw_string(JP_FONT, Vector2(38, 77), "鉱石 %d　　王女の戦い方を選ぶ" % ore, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color("f2d092"))
+	draw_string(JP_FONT, Vector2(38, 100), "長詠唱ほど被弾リスクは高いが、DPSも上がる。", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("e1c9ff"))
+	draw_rect(Rect2(18, 346, 396, 300), Color(0.03, 0.02, 0.09, 0.84), true)
+	for index in range(1, WANDS.size()):
+		var wand: Dictionary = WANDS[index]
+		var id := str(wand["id"])
+		var owned := owned_wands.has(id)
+		var rect := Rect2(24, 382 + (index - 1) * 90, 384, 78)
+		draw_rect(rect, Color("6c456b") if not owned else Color("435562"), true)
+		draw_rect(rect, Color("d8b8ee"), false, 1.0)
+		var status := "所持済み" if owned else "鉱石 %d" % int(wand["cost"])
+		draw_string(JP_FONT, Vector2(36, rect.position.y + 24), "%s　%s" % [str(wand["name"]), status], HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color.WHITE)
+		draw_string(JP_FONT, Vector2(36, rect.position.y + 46), _wand_stats_text(wand), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("e1c9ff"))
+		draw_string(JP_FONT, Vector2(36, rect.position.y + 66), str(wand["note"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("d9e5ff"))
+	_button(Rect2(24, 670, 384, 42), "自室へ戻る", Color("3e4a61"))
 
 func _draw_armorer() -> void:
 	draw_rect(Rect2(18, 18, 396, 90), Color(0.02, 0.04, 0.10, 0.84), true)
@@ -1056,27 +1180,22 @@ func _draw_resonance_effect(shield_pos: Vector2, shield_radius: float) -> void:
 		draw_circle(shield_pos, ring_radius + (1.0 - resonance_flash / 0.62) * 34.0, Color(color, 0.38 * resonance_flash / 0.62))
 
 func _draw_hud() -> void:
-	draw_rect(Rect2(16, 18, 400, 176), Color(0.02, 0.04, 0.10, 0.84), true)
-	draw_string(JP_FONT, Vector2(32, 44), str(_boss_data()["name"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color.WHITE)
-	draw_rect(Rect2(32, 53, 240, 10), Color("2c2940"), true)
-	draw_rect(Rect2(32, 53, 240 * boss_hp / boss_hp_max, 10), Color("d8709b"), true)
-	draw_string(JP_FONT, Vector2(288, 63), "敵HP %d%%" % int(100.0 * boss_hp / boss_hp_max), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f3c8d7"))
-	draw_string(JP_FONT, Vector2(32, 86), "腕力 %d / %d" % [int(stamina), int(cap)], HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("d9e5ff"))
-	draw_rect(Rect2(112, 76, 160, 11), Color("102038"), true)
-	draw_rect(Rect2(112, 76, 160 * cap / base_cap, 11), Color("355d8d"), true)
-	draw_rect(Rect2(112, 76, 160 * stamina / base_cap, 11), Color("66c8d9"), true)
-	draw_string(JP_FONT, Vector2(288, 86), "王女 %d" % princess_hp, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("f2a5c7"))
-	draw_string(JP_FONT, Vector2(32, 112), "王女の採掘　鉱石 +%d　次の欠片まで %.0f" % [run_ore, maxf(0.0, ORE_DAMAGE_STEP - mined_damage)], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("caa5ff"))
-	var heavy_power := 23.0 * (1.32 if selected_boss == "four_arm" else 1.0)
-	var protected_cost := heavy_power * maxf(0.0, 1.0 - cap_resist * SHIELD_POINT_BONUS)
-	draw_string(JP_FONT, Vector2(32, 136), "重攻撃の上限減少　-%d → -%d" % [int(ceil(heavy_power)), int(ceil(protected_cost))], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("a9dff0"))
+	# Keep the central upper field clear so the giant can always be read at a glance.
+	draw_rect(Rect2(14, 14, 204, 74), Color(0.02, 0.04, 0.10, 0.82), true)
+	draw_rect(Rect2(226, 14, 192, 74), Color(0.02, 0.04, 0.10, 0.82), true)
+	draw_string(JP_FONT, Vector2(26, 39), str(_boss_data()["name"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color.WHITE)
+	draw_rect(Rect2(26, 49, 176, 10), Color("2c2940"), true)
+	draw_rect(Rect2(26, 49, 176 * boss_hp / boss_hp_max, 10), Color("d8709b"), true)
+	draw_string(JP_FONT, Vector2(26, 79), "敵HP %d%%　鉱石 +%d" % [int(100.0 * boss_hp / boss_hp_max), run_ore], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("f3c8d7"))
+	draw_string(JP_FONT, Vector2(238, 39), "腕力 %d / %d　王女 %d / %d" % [int(stamina), int(cap), princess_hp, PRINCESS_HP_MAX], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("d9e5ff"))
+	draw_rect(Rect2(238, 49, 166, 8), Color("102038"), true)
+	draw_rect(Rect2(238, 49, 166 * stamina / base_cap, 8), Color("66c8d9"), true)
 	if not _resonance_type().is_empty():
 		var resonance_status := "%s 待機中" % _resonance_name() if resonance_ready else "%s 蓄積 %d / %d" % [_resonance_name(), int(resonance_charge), int(RESONANCE_GUARD_GOAL)]
-		draw_string(JP_FONT, Vector2(32, 160), resonance_status, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, _resonance_color())
-		draw_rect(Rect2(220, 151, 164, 9), Color("102038"), true)
+		draw_string(JP_FONT, Vector2(238, 76), resonance_status, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, _resonance_color())
+		draw_rect(Rect2(238, 80, 166, 5), Color("102038"), true)
 		var meter_ratio := 1.0 if resonance_ready else resonance_charge / RESONANCE_GUARD_GOAL
-		draw_rect(Rect2(220, 151, 164 * meter_ratio, 9), _resonance_color(), true)
-		draw_rect(Rect2(220, 151, 164, 9), Color("b7d6ec"), false, 1.0)
+		draw_rect(Rect2(238, 80, 166 * meter_ratio, 5), _resonance_color(), true)
 	draw_rect(Rect2(16, 731, 400, 25), Color(0.02, 0.04, 0.10, 0.84), true)
 	draw_string(JP_FONT, Vector2(28, 749), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("e8f1ff"))
 	if recall_ready and mode == Mode.BATTLE:
