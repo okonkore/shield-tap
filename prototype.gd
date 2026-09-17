@@ -105,6 +105,7 @@ var battle_clock := 0.0
 var princess_cast_clock := 0.0
 var princess_impact_time := 0.0
 var princess_cast_cancel_time := 0.0
+var princess_cast_empowered := false
 var resonance_charge := 0.0
 var resonance_ready := false
 var resonance_flash := 0.0
@@ -281,6 +282,7 @@ func _process_expedition(delta: float) -> void:
 	if princess_cast_clock >= cast_period:
 		princess_cast_clock -= cast_period
 		_princess_magic_hit()
+		_begin_princess_chant()
 	if boss_hp <= 0.0:
 		_finish(true, "ゴーレムを鎮めた")
 		return
@@ -312,9 +314,12 @@ func _princess_magic_hit() -> void:
 	# Each wand changes both the exposed chant time and the reward for completing it.
 	var wand := _wand_data(equipped_wand)
 	var magic_damage := float(wand["damage"]) * (1.0 + 0.064 * float(arm_level - 1))
-	if resonance_ready and _resonance_type() == "break":
+	if princess_cast_empowered:
 		magic_damage *= 1.85
-		_consume_resonance("砕岩共鳴が王女の一撃を強化")
+		princess_cast_empowered = false
+		resonance_flash = 0.34
+		message = "砕岩共鳴を込めた魔法が炸裂"
+		_play_sound(470.0, 0.18, 0.05, -0.28)
 	elif resonance_ready and _resonance_type() == "swift":
 		_consume_resonance("迅詠共鳴で王女の詠唱を短縮")
 	boss_hp = maxf(0.0, boss_hp - magic_damage)
@@ -324,6 +329,16 @@ func _princess_magic_hit() -> void:
 		run_ore += newly_mined
 		mined_damage = fmod(mined_damage, ORE_DAMAGE_STEP)
 	princess_impact_time = 0.32
+
+func _begin_princess_chant() -> void:
+	# 砕岩共鳴は満タン時点で王女に付与され、次の詠唱開始時に一発へ固定する。
+	if resonance_ready and _resonance_type() == "break":
+		resonance_charge = 0.0
+		resonance_ready = false
+		princess_cast_empowered = true
+		resonance_flash = 0.48
+		message = "砕岩共鳴を込めて詠唱を開始"
+		_play_sound(620.0, 0.18, 0.03, 0.15)
 
 func _princess_cast_period() -> float:
 	var period := float(_wand_data(equipped_wand)["period"])
@@ -372,7 +387,7 @@ func _charge_resonance(guard_power: float) -> bool:
 			return true
 		resonance_ready = true
 		resonance_flash = 0.62
-		message = "%sが発動 — 次の効果を待機" % _resonance_name()
+		message = "砕岩共鳴が王女に宿った — 次の詠唱を強化" if _resonance_type() == "break" else "%sが発動 — 次の効果を待機" % _resonance_name()
 		_play_sound(680.0, 0.22, 0.02, 0.18)
 		return true
 	return false
@@ -482,9 +497,11 @@ func _damage_princess(damage: int) -> void:
 		_finish(false, "王女が倒れた")
 	elif chanting:
 		# A hit breaks the spell before it is released; the next spell must be chanted from the start.
+		var empowered_cancelled := princess_cast_empowered
+		princess_cast_empowered = false
 		princess_cast_clock = 0.0
 		princess_cast_cancel_time = 0.56
-		message = "王女が被弾 — 詠唱が中断された"
+		message = "王女が被弾 — 強化詠唱が中断された" if empowered_cancelled else "王女が被弾 — 詠唱が中断された"
 	else:
 		message = "王女が被弾 — 盾で守れ"
 
@@ -510,6 +527,7 @@ func _start_expedition() -> void:
 	princess_cast_clock = 0.0
 	princess_impact_time = 0.0
 	princess_cast_cancel_time = 0.0
+	princess_cast_empowered = false
 	resonance_charge = 0.0
 	resonance_ready = false
 	resonance_flash = 0.0
@@ -1032,18 +1050,24 @@ func _draw_armorer() -> void:
 
 func _draw_princess_attack() -> void:
 	var cycle_t := princess_cast_clock / _princess_cast_period()
+	if resonance_ready and _resonance_type() == "break":
+		var aura_radius := 38.0 + sin(battle_clock * 5.0) * 5.0
+		draw_circle(PRINCESS_CAST, aura_radius, Color(1.0, 0.66, 0.28, 0.13))
+		draw_arc(PRINCESS_CAST, aura_radius, battle_clock * 2.0, battle_clock * 2.0 + TAU * 0.72, 24, Color("ffbd6a"), 2.0, true)
+		draw_string(JP_FONT, PRINCESS_CAST + Vector2(-42, -aura_radius - 12), "砕岩共鳴 付与中", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("ffd394"))
 	if cycle_t < PRINCESS_CHANT_RATIO:
 		var chant_t := cycle_t / PRINCESS_CHANT_RATIO
 		var cast_radius := 22.0 + chant_t * 33.0
 		var spin := battle_clock * 4.0
-		draw_circle(PRINCESS_CAST, cast_radius, Color(0.58, 0.25, 0.96, 0.06 + chant_t * 0.10))
+		var chant_color := Color("ffb35f") if princess_cast_empowered else Color(0.58, 0.25, 0.96, 0.06 + chant_t * 0.10)
+		draw_circle(PRINCESS_CAST, cast_radius, Color(chant_color, 0.13 + chant_t * 0.11) if princess_cast_empowered else chant_color)
 		draw_arc(PRINCESS_CAST, cast_radius, spin, spin + TAU * 0.76, 28, Color(0.78, 0.53, 1.0, 0.62), 2.0, true)
 		draw_arc(PRINCESS_CAST, cast_radius * 0.58, -spin * 1.4, -spin * 1.4 + TAU * 0.62, 22, Color(0.64, 0.82, 1.0, 0.55), 2.0, true)
 		for index in range(5):
 			var angle := spin + TAU * float(index) / 5.0
 			var spark := PRINCESS_CAST + Vector2(cos(angle), sin(angle)) * cast_radius * 0.72
 			draw_circle(spark, 2.0 + chant_t * 2.0, Color("ead7ff"))
-		draw_string(JP_FONT, PRINCESS_CAST + Vector2(-31, -cast_radius - 14), "詠唱中", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("efd9ff"))
+		draw_string(JP_FONT, PRINCESS_CAST + Vector2(-43, -cast_radius - 14), "強化詠唱中" if princess_cast_empowered else "詠唱中", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("ffd394") if princess_cast_empowered else Color("efd9ff"))
 	else:
 		var shot_t := (cycle_t - PRINCESS_CHANT_RATIO) / (1.0 - PRINCESS_CHANT_RATIO)
 		var trail := PackedVector2Array()
@@ -1055,8 +1079,9 @@ func _draw_princess_attack() -> void:
 		draw_polyline(trail, Color(0.74, 0.48, 1.0, 0.34), 2.0, true)
 		var orb := PRINCESS_CAST.lerp(GOLEM_TARGET, shot_t)
 		orb.y -= sin(PI * shot_t) * 58.0
-		draw_circle(orb, 17.0, Color(0.60, 0.26, 0.95, 0.18))
-		draw_circle(orb, 9.0, Color(0.77, 0.54, 1.0, 0.78))
+		var orb_color := Color("ffad55") if princess_cast_empowered else Color(0.77, 0.54, 1.0, 0.78)
+		draw_circle(orb, 17.0, Color(orb_color, 0.22))
+		draw_circle(orb, 9.0, orb_color)
 		draw_circle(orb, 3.0, Color("f4e5ff"))
 	if princess_impact_time > 0.0:
 		var impact_t := princess_impact_time / 0.32
@@ -1191,10 +1216,14 @@ func _draw_hud() -> void:
 	draw_rect(Rect2(238, 49, 166, 8), Color("102038"), true)
 	draw_rect(Rect2(238, 49, 166 * stamina / base_cap, 8), Color("66c8d9"), true)
 	if not _resonance_type().is_empty():
-		var resonance_status := "%s 待機中" % _resonance_name() if resonance_ready else "%s 蓄積 %d / %d" % [_resonance_name(), int(resonance_charge), int(RESONANCE_GUARD_GOAL)]
+		var resonance_status := "%s 蓄積 %d / %d" % [_resonance_name(), int(resonance_charge), int(RESONANCE_GUARD_GOAL)]
+		if resonance_ready:
+			resonance_status = "砕岩共鳴 王女に付与中" if _resonance_type() == "break" else "%s 待機中" % _resonance_name()
+		elif princess_cast_empowered:
+			resonance_status = "砕岩共鳴 強化詠唱中"
 		draw_string(JP_FONT, Vector2(238, 76), resonance_status, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, _resonance_color())
 		draw_rect(Rect2(238, 80, 166, 5), Color("102038"), true)
-		var meter_ratio := 1.0 if resonance_ready else resonance_charge / RESONANCE_GUARD_GOAL
+		var meter_ratio := 1.0 if resonance_ready or princess_cast_empowered else resonance_charge / RESONANCE_GUARD_GOAL
 		draw_rect(Rect2(238, 80, 166 * meter_ratio, 5), _resonance_color(), true)
 	draw_rect(Rect2(16, 731, 400, 25), Color(0.02, 0.04, 0.10, 0.84), true)
 	draw_string(JP_FONT, Vector2(28, 749), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("e8f1ff"))
