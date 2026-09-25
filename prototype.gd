@@ -171,6 +171,9 @@ var puzzle_clear_time := 0.0
 var puzzle_tap_row := -1
 var puzzle_tap_column := -1
 var puzzle_tap_msec := 0
+var puzzle_drag_active := false
+var puzzle_drag_add := true
+var puzzle_drag_last_pos := Vector2.ZERO
 
 const PATTERN := [
 	{"kind": "stone", "wait": 0.34}, {"kind": "stone", "wait": 0.28},
@@ -233,9 +236,6 @@ func _process(delta: float) -> void:
 				puzzle_level += 1
 				_save_progress()
 				_start_puzzle()
-		elif puzzle_tap_row >= 0 and Time.get_ticks_msec() - puzzle_tap_msec >= PUZZLE_TAP_WINDOW_MSEC:
-			_puzzle_toggle_note(puzzle_tap_row, puzzle_tap_column)
-			puzzle_tap_row = -1
 	if mode in [Mode.BATTLE, Mode.RECALL, Mode.DOWNED]:
 		_process_expedition(delta)
 	queue_redraw()
@@ -784,6 +784,7 @@ func _start_puzzle() -> void:
 	puzzle_complete = false
 	puzzle_clear_time = 0.0
 	puzzle_tap_row = -1
+	puzzle_drag_active = false
 	var stage: Dictionary = PUZZLE_STAGES[puzzle_level % PUZZLE_STAGES.size()]
 	var variant := floori(float(puzzle_level / PUZZLE_STAGES.size())) % 8
 	for row in range(PUZZLE_SIZE):
@@ -814,7 +815,7 @@ func _start_puzzle() -> void:
 				if source_row < int(stage["fixed"]):
 					puzzle_birds[cell.y][cell.x] = true
 					puzzle_fixed[cell.y][cell.x] = true
-	message = "1回タップで白い×、同じマスを素早く2回で開く"
+	message = "1回タップで×、2回で開く。なぞると連続操作"
 	mode = Mode.PUZZLE
 
 func _puzzle_count_found() -> int:
@@ -824,11 +825,30 @@ func _puzzle_count_found() -> int:
 			count += 1
 	return count
 
-func _puzzle_toggle_note(row: int, column: int) -> void:
+func _puzzle_set_note(row: int, column: int, add_note: bool) -> void:
 	if bool(puzzle_birds[row][column]) or bool(puzzle_wrong[row][column]):
 		return
-	puzzle_notes[row][column] = not bool(puzzle_notes[row][column])
-	message = "白い×をメモした" if bool(puzzle_notes[row][column]) else "白い×を消した"
+	if bool(puzzle_notes[row][column]) == add_note:
+		return
+	puzzle_notes[row][column] = add_note
+	message = "白い×をメモした" if add_note else "白い×を消した"
+
+func _puzzle_drag_to(pos: Vector2) -> void:
+	if not puzzle_drag_active or mode != Mode.PUZZLE or puzzle_complete:
+		return
+	var board := Rect2(PUZZLE_ORIGIN, Vector2(PUZZLE_CELL * PUZZLE_SIZE, PUZZLE_CELL * PUZZLE_SIZE))
+	var start_pos := puzzle_drag_last_pos
+	var steps := maxi(1, ceili(start_pos.distance_to(pos) / (PUZZLE_CELL * 0.35)))
+	for step in range(1, steps + 1):
+		var sample := start_pos.lerp(pos, float(step) / float(steps))
+		if not board.has_point(sample):
+			continue
+		var column := int((sample.x - PUZZLE_ORIGIN.x) / PUZZLE_CELL)
+		var row := int((sample.y - PUZZLE_ORIGIN.y) / PUZZLE_CELL)
+		if row != puzzle_tap_row or column != puzzle_tap_column:
+			puzzle_tap_row = -1
+		_puzzle_set_note(row, column, puzzle_drag_add)
+	puzzle_drag_last_pos = pos
 
 func _puzzle_open(row: int, column: int) -> void:
 	if puzzle_complete or bool(puzzle_birds[row][column]) or bool(puzzle_wrong[row][column]):
@@ -850,6 +870,7 @@ func _puzzle_open(row: int, column: int) -> void:
 	_play_sound(150.0, 0.10, 0.10, -0.20)
 	if puzzle_lives <= 0:
 		puzzle_tap_row = -1
+		puzzle_drag_active = false
 		home_panel = HomePanel.MAIN
 		mode = Mode.HOME
 		message = "パズル Lv.%d 失敗。次回は同じ盤面から再挑戦" % (puzzle_level + 1)
@@ -862,6 +883,7 @@ func _handle_puzzle_input(pos: Vector2) -> void:
 		return
 	if Rect2(24, 650, 384, 56).has_point(pos):
 		puzzle_tap_row = -1
+		puzzle_drag_active = false
 		home_panel = HomePanel.MAIN
 		mode = Mode.HOME
 		return
@@ -872,19 +894,30 @@ func _handle_puzzle_input(pos: Vector2) -> void:
 	var row := int((pos.y - PUZZLE_ORIGIN.y) / PUZZLE_CELL)
 	if bool(puzzle_birds[row][column]) or bool(puzzle_wrong[row][column]):
 		puzzle_tap_row = -1
+		puzzle_drag_active = false
 		return
 	var now_msec := Time.get_ticks_msec()
 	if puzzle_tap_row == row and puzzle_tap_column == column and now_msec - puzzle_tap_msec <= PUZZLE_TAP_WINDOW_MSEC:
 		puzzle_tap_row = -1
+		puzzle_drag_active = false
 		_puzzle_open(row, column)
 		return
-	if puzzle_tap_row >= 0:
-		_puzzle_toggle_note(puzzle_tap_row, puzzle_tap_column)
+	puzzle_drag_add = not bool(puzzle_notes[row][column])
+	_puzzle_set_note(row, column, puzzle_drag_add)
+	puzzle_drag_active = true
+	puzzle_drag_last_pos = pos
 	puzzle_tap_row = row
 	puzzle_tap_column = column
 	puzzle_tap_msec = now_msec
 
 func _input(event: InputEvent) -> void:
+	if mode == Mode.PUZZLE and not dialog_visible:
+		if event is InputEventScreenDrag:
+			_puzzle_drag_to(event.position)
+			return
+		if event is InputEventMouseMotion and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
+			_puzzle_drag_to(event.position)
+			return
 	var pressed := false
 	var released := false
 	var pos := Vector2.ZERO
@@ -898,6 +931,7 @@ func _input(event: InputEvent) -> void:
 		pos = event.position
 	if released:
 		held = false
+		puzzle_drag_active = false
 		return
 	if not pressed:
 		return
@@ -1215,7 +1249,7 @@ func _draw_puzzle() -> void:
 			else:
 				draw_rect(cell_rect, Color("f1d798"), false, 1.2)
 	draw_string(JP_FONT, Vector2(27, 594), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f2d092"))
-	draw_string(JP_FONT, Vector2(27, 621), "白い×はもう一度タップで消去。ダブルタップで開く。", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("c9daf5"))
+	draw_string(JP_FONT, Vector2(27, 621), "×からなぞると連続消去。ダブルタップで開く。", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("c9daf5"))
 	_button(Rect2(24, 650, 384, 56), "自室へ戻る", Color("3e4a61"))
 	if puzzle_complete:
 		draw_rect(Rect2(30, 335, 372, 110), Color(0.03, 0.08, 0.17, 0.91), true)
