@@ -25,16 +25,36 @@ const SHIELD_POINT_BONUS := 0.08
 const RESONANCE_GUARD_GOAL := 45.0
 const PRINCESS_HP_MAX := 50
 const PUZZLE_ORIGIN := Vector2(34, 205)
+const PUZZLE_BOARD_WIDTH := 364.0
 const PUZZLE_CELL := 52.0
-const PUZZLE_COLORS := [Color("e6c84e"), Color("ac91ec"), Color("ee8b4e"), Color("81c36c"), Color("e57dc1"), Color("4fa9c6"), Color("4b83c5")]
-const PUZZLE_SIZE := 7
+const PUZZLE_LEVELS_PER_SIZE := 5
+const PUZZLE_COLORS := [
+	Color("e6c84e"), Color("ac91ec"), Color("ee8b4e"), Color("81c36c"),
+	Color("e57dc1"), Color("4fa9c6"), Color("4b83c5"), Color("c85f69"),
+	Color("548b77"), Color("9d7158"),
+]
 const PUZZLE_TAP_WINDOW_MSEC := 350
-# Each color is one edge-connected region. The first two stages reveal birds to ease players in.
-# Stages were checked for a unique answer under the row/column/color/non-touching rules.
+# Every color is one edge-connected region. Each template has exactly one answer
+# after its initially revealed birds are taken into account.
 const PUZZLE_STAGES := [
-	{"rows": ["0000111", "0221111", "2222113", "2252113", "5254663", "5554633", "5556666"], "birds": [0, 5, 2, 6, 3, 1, 4], "fixed": 2},
-	{"rows": ["1100000", "1112000", "1112200", "1442233", "4442233", "4444225", "6444255"], "birds": [4, 1, 3, 5, 2, 6, 0], "fixed": 1},
-	{"rows": ["2444100", "2444111", "2244113", "2244333", "5444444", "5444444", "5546444"], "birds": [6, 4, 1, 5, 2, 0, 3], "fixed": 0},
+	[
+		{"rows": ["0000111", "0221111", "2222113", "2252113", "5254663", "5554633", "5556666"], "birds": [0, 5, 2, 6, 3, 1, 4], "fixed": 2},
+		{"rows": ["1100000", "1112000", "1112200", "1442233", "4442233", "4444225", "6444255"], "birds": [4, 1, 3, 5, 2, 6, 0], "fixed": 1},
+		{"rows": ["2444100", "2444111", "2244113", "2244333", "5444444", "5444444", "5546444"], "birds": [6, 4, 1, 5, 2, 0, 3], "fixed": 0},
+	],
+	[
+		{"rows": ["10000000", "11102200", "13222000", "53332224", "55533444", "55334444", "55666674", "56667774"], "birds": [6, 2, 4, 1, 7, 0, 3, 5], "fixed": 2},
+		{"rows": ["00002111", "00002211", "33322441", "55333444", "55534466", "55576666", "57577776", "57777766"], "birds": [3, 6, 4, 2, 5, 0, 7, 1], "fixed": 1},
+		{"rows": ["10000000", "11000000", "11032222", "11133322", "63333544", "66665544", "66665444", "66775554"], "birds": [2, 0, 6, 4, 7, 5, 1, 3], "fixed": 1},
+	],
+	[
+		{"rows": ["200001111", "200001111", "222001111", "224333116", "244353666", "444355566", "743355666", "773358886", "777558888"], "birds": [3, 5, 1, 4, 2, 6, 8, 0, 7], "fixed": 3},
+		{"rows": ["222001111", "220001111", "222301111", "333334488", "355444488", "557466488", "777466668", "777466888", "777446888"], "birds": [4, 6, 0, 3, 5, 1, 7, 2, 8], "fixed": 3},
+	],
+	[
+		{"rows": ["0221111433", "0221111433", "0225111443", "0225554443", "0222566446", "0555556666", "0099588766", "0999887767", "9999888777", "9999988777"], "birds": [0, 5, 1, 9, 7, 3, 8, 6, 4, 2], "fixed": 4},
+		{"rows": ["1111130000", "1141333000", "1141333222", "4443333222", "4443335556", "4447355556", "7747385666", "7777788966", "7778888969", "7888889999"], "birds": [7, 0, 9, 3, 1, 5, 8, 2, 4, 6], "fixed": 4},
+	],
 ]
 
 enum Mode { TITLE, HOME, ARMORER, WANDER, PUZZLE, BATTLE, RECALL, DOWNED, RESULTS }
@@ -159,6 +179,7 @@ var last_press_msec := -1000
 var last_press_pos := Vector2(-999.0, -999.0)
 var last_press_touch := false
 var puzzle_level := 0
+var puzzle_size := 7
 var puzzle_solution: Array = []
 var puzzle_answer: Array = []
 var puzzle_birds: Array = []
@@ -764,9 +785,9 @@ func _puzzle_transform(row: int, column: int, variant: int) -> Vector2i:
 	var transformed_row := row
 	var transformed_column := column
 	if (variant & 1) != 0:
-		transformed_column = PUZZLE_SIZE - 1 - transformed_column
+		transformed_column = puzzle_size - 1 - transformed_column
 	if (variant & 2) != 0:
-		transformed_row = PUZZLE_SIZE - 1 - transformed_row
+		transformed_row = puzzle_size - 1 - transformed_row
 	if (variant & 4) != 0:
 		var swap := transformed_row
 		transformed_row = transformed_column
@@ -785,15 +806,20 @@ func _start_puzzle() -> void:
 	puzzle_clear_time = 0.0
 	puzzle_tap_row = -1
 	puzzle_drag_active = false
-	var stage: Dictionary = PUZZLE_STAGES[puzzle_level % PUZZLE_STAGES.size()]
-	var variant := floori(float(puzzle_level / PUZZLE_STAGES.size())) % 8
-	for row in range(PUZZLE_SIZE):
+	var size_group := mini(PUZZLE_STAGES.size() - 1, floori(float(puzzle_level) / float(PUZZLE_LEVELS_PER_SIZE)))
+	var level_in_group := puzzle_level - size_group * PUZZLE_LEVELS_PER_SIZE
+	var stage_pool: Array = PUZZLE_STAGES[size_group]
+	var stage_index := mini(level_in_group, stage_pool.size() - 1)
+	var stage: Dictionary = stage_pool[stage_index]
+	puzzle_size = int((stage["rows"] as Array).size())
+	var variant := (level_in_group - stage_index) % 8
+	for row in range(puzzle_size):
 		var colors_row: Array = []
 		var birds_row: Array = []
 		var fixed_row: Array = []
 		var notes_row: Array = []
 		var wrong_row: Array = []
-		for column in range(PUZZLE_SIZE):
+		for column in range(puzzle_size):
 			colors_row.append(-1)
 			birds_row.append(false)
 			fixed_row.append(false)
@@ -805,8 +831,8 @@ func _start_puzzle() -> void:
 		puzzle_fixed.append(fixed_row)
 		puzzle_notes.append(notes_row)
 		puzzle_wrong.append(wrong_row)
-	for source_row in range(PUZZLE_SIZE):
-		for source_column in range(PUZZLE_SIZE):
+	for source_row in range(puzzle_size):
+		for source_column in range(puzzle_size):
 			var cell := _puzzle_transform(source_row, source_column, variant)
 			var color_id: int = str(stage["rows"][source_row]).substr(source_column, 1).to_int()
 			puzzle_solution[cell.y][cell.x] = color_id
@@ -820,7 +846,7 @@ func _start_puzzle() -> void:
 
 func _puzzle_count_found() -> int:
 	var count := 0
-	for row in range(PUZZLE_SIZE):
+	for row in range(puzzle_size):
 		if bool(puzzle_birds[row][int(puzzle_answer[row])]):
 			count += 1
 	return count
@@ -836,15 +862,16 @@ func _puzzle_set_note(row: int, column: int, add_note: bool) -> void:
 func _puzzle_drag_to(pos: Vector2) -> void:
 	if not puzzle_drag_active or mode != Mode.PUZZLE or puzzle_complete:
 		return
-	var board := Rect2(PUZZLE_ORIGIN, Vector2(PUZZLE_CELL * PUZZLE_SIZE, PUZZLE_CELL * PUZZLE_SIZE))
+	var cell_size := PUZZLE_BOARD_WIDTH / float(puzzle_size)
+	var board := Rect2(PUZZLE_ORIGIN, Vector2(PUZZLE_BOARD_WIDTH, PUZZLE_BOARD_WIDTH))
 	var start_pos := puzzle_drag_last_pos
-	var steps := maxi(1, ceili(start_pos.distance_to(pos) / (PUZZLE_CELL * 0.35)))
+	var steps := maxi(1, ceili(start_pos.distance_to(pos) / (cell_size * 0.35)))
 	for step in range(1, steps + 1):
 		var sample := start_pos.lerp(pos, float(step) / float(steps))
 		if not board.has_point(sample):
 			continue
-		var column := int((sample.x - PUZZLE_ORIGIN.x) / PUZZLE_CELL)
-		var row := int((sample.y - PUZZLE_ORIGIN.y) / PUZZLE_CELL)
+		var column := int((sample.x - PUZZLE_ORIGIN.x) / cell_size)
+		var row := int((sample.y - PUZZLE_ORIGIN.y) / cell_size)
 		if row != puzzle_tap_row or column != puzzle_tap_column:
 			puzzle_tap_row = -1
 		_puzzle_set_note(row, column, puzzle_drag_add)
@@ -857,7 +884,7 @@ func _puzzle_open(row: int, column: int) -> void:
 	if column == int(puzzle_answer[row]):
 		puzzle_birds[row][column] = true
 		_play_sound(600.0, 0.08, 0.02, 0.02)
-		if _puzzle_count_found() == PUZZLE_SIZE:
+		if _puzzle_count_found() == puzzle_size:
 			puzzle_complete = true
 			puzzle_clear_time = 1.8
 			message = "クリア！　次のレベルへ"
@@ -887,11 +914,12 @@ func _handle_puzzle_input(pos: Vector2) -> void:
 		home_panel = HomePanel.MAIN
 		mode = Mode.HOME
 		return
-	var board := Rect2(PUZZLE_ORIGIN, Vector2(PUZZLE_CELL * PUZZLE_SIZE, PUZZLE_CELL * PUZZLE_SIZE))
+	var cell_size := PUZZLE_BOARD_WIDTH / float(puzzle_size)
+	var board := Rect2(PUZZLE_ORIGIN, Vector2(PUZZLE_BOARD_WIDTH, PUZZLE_BOARD_WIDTH))
 	if not board.has_point(pos):
 		return
-	var column := int((pos.x - PUZZLE_ORIGIN.x) / PUZZLE_CELL)
-	var row := int((pos.y - PUZZLE_ORIGIN.y) / PUZZLE_CELL)
+	var column := int((pos.x - PUZZLE_ORIGIN.x) / cell_size)
+	var row := int((pos.y - PUZZLE_ORIGIN.y) / cell_size)
 	if bool(puzzle_birds[row][column]) or bool(puzzle_wrong[row][column]):
 		puzzle_tap_row = -1
 		puzzle_drag_active = false
@@ -1219,35 +1247,43 @@ func _draw_home() -> void:
 
 func _draw_puzzle() -> void:
 	draw_rect(Rect2(18, 16, 396, 166), Color(0.03, 0.07, 0.13, 0.90), true)
-	draw_string(JP_FONT, Vector2(38, 47), "鳥さがし　Lv.%d" % (puzzle_level + 1), HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Color.WHITE)
+	draw_string(JP_FONT, Vector2(38, 47), "鳥さがし Lv.%d　%d×%d" % [puzzle_level + 1, puzzle_size, puzzle_size], HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color.WHITE)
 	draw_string(JP_FONT, Vector2(38, 76), "各色・各行・各列に鳥が一羽ずつ。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("c9daf5"))
 	draw_string(JP_FONT, Vector2(38, 101), "鳥同士は斜めも含めて隣り合わない。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("c9daf5"))
-	draw_string(JP_FONT, Vector2(38, 136), "♥ %d　　発見 %d / %d" % [puzzle_lives, _puzzle_count_found(), PUZZLE_SIZE], HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("f2d092"))
-	for row in range(PUZZLE_SIZE):
-		for column in range(PUZZLE_SIZE):
-			var cell_rect := Rect2(PUZZLE_ORIGIN + Vector2(column * PUZZLE_CELL, row * PUZZLE_CELL), Vector2(PUZZLE_CELL, PUZZLE_CELL))
+	draw_string(JP_FONT, Vector2(38, 136), "♥ %d　　発見 %d / %d" % [puzzle_lives, _puzzle_count_found(), puzzle_size], HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("f2d092"))
+	var cell_size := PUZZLE_BOARD_WIDTH / float(puzzle_size)
+	var symbol_scale := cell_size / PUZZLE_CELL
+	for row in range(puzzle_size):
+		for column in range(puzzle_size):
+			var cell_rect := Rect2(PUZZLE_ORIGIN + Vector2(column * cell_size, row * cell_size), Vector2(cell_size, cell_size))
 			var center := cell_rect.get_center()
 			var color_id := int(puzzle_solution[row][column])
-			draw_rect(cell_rect.grow(-2.0), PUZZLE_COLORS[color_id], true)
+			draw_rect(cell_rect.grow(-2.0 * symbol_scale), PUZZLE_COLORS[color_id], true)
 			if bool(puzzle_wrong[row][column]):
-				draw_line(center + Vector2(-11, -11), center + Vector2(11, 11), Color("eb473e"), 5.0)
-				draw_line(center + Vector2(11, -11), center + Vector2(-11, 11), Color("eb473e"), 5.0)
+				draw_line(center + Vector2(-11, -11) * symbol_scale, center + Vector2(11, 11) * symbol_scale, Color("eb473e"), 5.0 * symbol_scale)
+				draw_line(center + Vector2(11, -11) * symbol_scale, center + Vector2(-11, 11) * symbol_scale, Color("eb473e"), 5.0 * symbol_scale)
 			elif bool(puzzle_notes[row][column]):
-				draw_line(center + Vector2(-11, -11), center + Vector2(11, 11), Color.WHITE, 5.0)
-				draw_line(center + Vector2(11, -11), center + Vector2(-11, 11), Color.WHITE, 5.0)
+				draw_line(center + Vector2(-11, -11) * symbol_scale, center + Vector2(11, 11) * symbol_scale, Color.WHITE, 5.0 * symbol_scale)
+				draw_line(center + Vector2(11, -11) * symbol_scale, center + Vector2(-11, 11) * symbol_scale, Color.WHITE, 5.0 * symbol_scale)
 			if bool(puzzle_birds[row][column]):
-				draw_circle(center + Vector2(0, 2), 14, Color(0.02, 0.08, 0.16, 0.35))
-				draw_circle(center, 13, Color("77d9f4"))
-				draw_circle(center + Vector2(0, -9), 8, Color("8be4fb"))
-				draw_circle(center + Vector2(-3, -10), 2.8, Color.WHITE)
-				draw_circle(center + Vector2(3, -10), 2.8, Color.WHITE)
-				draw_circle(center + Vector2(-3, -10), 1.2, Color("15243a"))
-				draw_circle(center + Vector2(3, -10), 1.2, Color("15243a"))
-				draw_colored_polygon(PackedVector2Array([center + Vector2(-2, -6), center + Vector2(4, -6), center + Vector2(1, -3)]), Color("f3ae55"))
+				draw_circle(center + Vector2(0, 2) * symbol_scale, 14.0 * symbol_scale, Color(0.02, 0.08, 0.16, 0.35))
+				draw_circle(center, 13.0 * symbol_scale, Color("77d9f4"))
+				draw_circle(center + Vector2(0, -9) * symbol_scale, 8.0 * symbol_scale, Color("8be4fb"))
+				draw_circle(center + Vector2(-3, -10) * symbol_scale, 2.8 * symbol_scale, Color.WHITE)
+				draw_circle(center + Vector2(3, -10) * symbol_scale, 2.8 * symbol_scale, Color.WHITE)
+				draw_circle(center + Vector2(-3, -10) * symbol_scale, 1.2 * symbol_scale, Color("15243a"))
+				draw_circle(center + Vector2(3, -10) * symbol_scale, 1.2 * symbol_scale, Color("15243a"))
+				draw_colored_polygon(PackedVector2Array([center + Vector2(-2, -6) * symbol_scale, center + Vector2(4, -6) * symbol_scale, center + Vector2(1, -3) * symbol_scale]), Color("f3ae55"))
 			if bool(puzzle_fixed[row][column]):
-				draw_rect(cell_rect.grow(-3.0), Color("f8f8e2"), false, 3.0)
+				draw_rect(cell_rect.grow(-3.0 * symbol_scale), Color("f8f8e2"), false, 3.0 * symbol_scale)
 			else:
-				draw_rect(cell_rect, Color("f1d798"), false, 1.2)
+				draw_rect(cell_rect, Color("f1d798"), false, 1.2 * symbol_scale)
+			if column < puzzle_size - 1 and int(puzzle_solution[row][column + 1]) != color_id:
+				var border_x := cell_rect.end.x
+				draw_line(Vector2(border_x, cell_rect.position.y), Vector2(border_x, cell_rect.end.y), Color("fff7d5"), 2.0 * symbol_scale)
+			if row < puzzle_size - 1 and int(puzzle_solution[row + 1][column]) != color_id:
+				var border_y := cell_rect.end.y
+				draw_line(Vector2(cell_rect.position.x, border_y), Vector2(cell_rect.end.x, border_y), Color("fff7d5"), 2.0 * symbol_scale)
 	draw_string(JP_FONT, Vector2(27, 594), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f2d092"))
 	draw_string(JP_FONT, Vector2(27, 621), "×からなぞると連続消去。ダブルタップで開く。", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("c9daf5"))
 	_button(Rect2(24, 650, 384, 56), "自室へ戻る", Color("3e4a61"))
