@@ -24,35 +24,10 @@ const RECALL_CHANT_DURATION := 5.2
 const SHIELD_POINT_BONUS := 0.08
 const RESONANCE_GUARD_GOAL := 45.0
 const PRINCESS_HP_MAX := 50
-const PUZZLE_ORIGIN := Vector2(27, 145)
-const PUZZLE_CELL := 42.0
-const PUZZLE_COLORS := [
-	Color("df6b83"), Color("e99a56"), Color("e8d36e"),
-	Color("9acb71"), Color("57c4a7"), Color("64afd9"),
-	Color("7186dc"), Color("a27bd9"), Color("d47db7"),
-]
-const PUZZLE_SOLUTION := [
-	[5, 3, 4, 6, 7, 8, 9, 1, 2],
-	[6, 7, 2, 1, 9, 5, 3, 4, 8],
-	[1, 9, 8, 3, 4, 2, 5, 6, 7],
-	[8, 5, 9, 7, 6, 1, 4, 2, 3],
-	[4, 2, 6, 8, 5, 3, 7, 9, 1],
-	[7, 1, 3, 9, 2, 4, 8, 5, 6],
-	[9, 6, 1, 5, 3, 7, 2, 8, 4],
-	[2, 8, 7, 4, 1, 9, 6, 3, 5],
-	[3, 4, 5, 2, 8, 6, 1, 7, 9],
-]
-const PUZZLE_GIVENS := [
-	[5, 3, 0, 0, 7, 0, 0, 0, 0],
-	[6, 0, 0, 1, 9, 5, 0, 0, 0],
-	[0, 9, 8, 0, 0, 0, 0, 6, 0],
-	[8, 0, 0, 0, 6, 0, 0, 0, 3],
-	[4, 0, 0, 8, 0, 3, 0, 0, 1],
-	[7, 0, 0, 0, 2, 0, 0, 0, 6],
-	[0, 6, 0, 0, 0, 0, 2, 8, 0],
-	[0, 0, 0, 4, 1, 9, 0, 0, 5],
-	[0, 0, 0, 0, 8, 0, 0, 7, 9],
-]
+const PUZZLE_ORIGIN := Vector2(34, 205)
+const PUZZLE_CELL := 52.0
+const PUZZLE_COLORS := [Color("e6c84e"), Color("ac91ec"), Color("ee8b4e"), Color("81c36c"), Color("e57dc1"), Color("4fa9c6"), Color("4b83c5")]
+const PUZZLE_SOLUTION_COLUMNS := [1, 3, 5, 0, 2, 4, 6]
 
 enum Mode { TITLE, HOME, ARMORER, WANDER, PUZZLE, BATTLE, RECALL, DOWNED, RESULTS }
 enum TitlePanel { MAIN, CONTINUE, NEW_GAME }
@@ -175,9 +150,13 @@ var dialog_body := ""
 var last_press_msec := -1000
 var last_press_pos := Vector2(-999.0, -999.0)
 var puzzle_solution: Array = []
-var puzzle_cells: Array = []
-var puzzle_givens: Array = []
-var puzzle_selected := Vector2i(-1, -1)
+var puzzle_birds: Array = []
+var puzzle_fixed: Array = []
+var puzzle_blocked: Array = []
+var puzzle_remove_mode := false
+var puzzle_hints := 5
+var puzzle_lives := 3
+var puzzle_failed := false
 var puzzle_complete := false
 
 const PATTERN := [
@@ -756,85 +735,142 @@ func _equip_wand(id: String) -> void:
 	_show_dialog("杖を装備した", "%s\n%s\n次の戦闘リザルトで保存されます。" % [str(wand["name"]), _wand_stats_text(wand)])
 
 func _start_puzzle() -> void:
-	var color_order := range(9)
-	color_order.shuffle()
 	puzzle_solution.clear()
-	puzzle_cells.clear()
-	puzzle_givens.clear()
-	for row in range(9):
-		var solution_row: Array = []
-		var cells_row: Array = []
-		var givens_row: Array = []
-		for column in range(9):
-			var value := int(PUZZLE_SOLUTION[row][column]) - 1
-			var color_id := int(color_order[value])
-			solution_row.append(color_id)
-			var is_given := int(PUZZLE_GIVENS[row][column]) != 0
-			cells_row.append(color_id if is_given else -1)
-			givens_row.append(is_given)
-		puzzle_solution.append(solution_row)
-		puzzle_cells.append(cells_row)
-		puzzle_givens.append(givens_row)
-	puzzle_selected = Vector2i(-1, -1)
+	puzzle_birds.clear()
+	puzzle_fixed.clear()
+	puzzle_blocked.clear()
+	puzzle_hints = 5
+	puzzle_lives = 3
+	puzzle_failed = false
+	puzzle_remove_mode = false
 	puzzle_complete = false
-	message = "鉱石を並べて、盤面を整えよう"
+	for row in range(7):
+		var colors_row: Array = []
+		var birds_row: Array = []
+		var fixed_row: Array = []
+		var blocked_row: Array = []
+		for column in range(7):
+			colors_row.append((row + column) % 7)
+			birds_row.append(false)
+			fixed_row.append(false)
+			var is_solution_cell: bool = column == int(PUZZLE_SOLUTION_COLUMNS[row])
+			blocked_row.append(not is_solution_cell and ((row * 5 + column * 3) % 8 == 0))
+		puzzle_solution.append(colors_row)
+		puzzle_birds.append(birds_row)
+		puzzle_fixed.append(fixed_row)
+		puzzle_blocked.append(blocked_row)
+	for row in range(2):
+		var column: int = int(PUZZLE_SOLUTION_COLUMNS[row])
+		puzzle_birds[row][column] = true
+		puzzle_fixed[row][column] = true
+	message = "各色・各行・各列に鳥を一羽。鳥同士は隣り合えない。"
 	mode = Mode.PUZZLE
 
-func _puzzle_has_conflict(row: int, column: int) -> bool:
-	var value := int(puzzle_cells[row][column])
-	if value < 0:
+func _puzzle_conflict(row: int, column: int) -> bool:
+	if not bool(puzzle_birds[row][column]):
 		return false
-	for index in range(9):
-		if index != column and int(puzzle_cells[row][index]) == value:
+	var color_id := int(puzzle_solution[row][column])
+	for index in range(7):
+		if index != column and bool(puzzle_birds[row][index]):
 			return true
-		if index != row and int(puzzle_cells[index][column]) == value:
+		if index != row and bool(puzzle_birds[index][column]):
 			return true
-	var box_row := (row / 3) * 3
-	var box_column := (column / 3) * 3
-	for box_y in range(box_row, box_row + 3):
-		for box_x in range(box_column, box_column + 3):
-			if (box_y != row or box_x != column) and int(puzzle_cells[box_y][box_x]) == value:
-				return true
+	for other_row in range(7):
+		for other_column in range(7):
+			if (other_row != row or other_column != column) and bool(puzzle_birds[other_row][other_column]):
+				if int(puzzle_solution[other_row][other_column]) == color_id:
+					return true
+				if absi(other_row - row) <= 1 and absi(other_column - column) <= 1:
+					return true
 	return false
 
 func _puzzle_is_solved() -> bool:
-	for row in range(9):
-		for column in range(9):
-			if int(puzzle_cells[row][column]) != int(puzzle_solution[row][column]):
-				return false
-	return true
+	for row in range(7):
+		var row_count := 0
+		for column in range(7):
+			if bool(puzzle_birds[row][column]):
+				row_count += 1
+		if row_count != 1:
+			return false
+	for column in range(7):
+		var column_count := 0
+		for row in range(7):
+			if bool(puzzle_birds[row][column]):
+				column_count += 1
+		if column_count != 1:
+			return false
+	var colors_seen: Array = []
+	for row in range(7):
+		for column in range(7):
+			if bool(puzzle_birds[row][column]):
+				var color_id := int(puzzle_solution[row][column])
+				if colors_seen.has(color_id):
+					return false
+				colors_seen.append(color_id)
+	return colors_seen.size() == 7
+
+func _puzzle_place(row: int, column: int) -> void:
+	if bool(puzzle_birds[row][column]):
+		if puzzle_remove_mode and not bool(puzzle_fixed[row][column]):
+			puzzle_birds[row][column] = false
+			puzzle_remove_mode = false
+			message = "鳥を一羽戻した"
+		else:
+			message = "そこにはもう鳥がいる"
+		return
+	if puzzle_remove_mode:
+		puzzle_remove_mode = false
+		message = "戻す鳥のマスをタップしてね"
+		return
+	if bool(puzzle_blocked[row][column]):
+		message = "そこには置けない"
+		return
+	puzzle_birds[row][column] = true
+	if _puzzle_conflict(row, column):
+		puzzle_birds[row][column] = false
+		puzzle_lives -= 1
+		message = "ルール違反！　残りハート %d" % puzzle_lives
+		_play_sound(150.0, 0.10, 0.10, -0.20)
+		if puzzle_lives <= 0:
+			puzzle_failed = true
+			puzzle_complete = true
+			_show_dialog("ゲームオーバー", "ハートがなくなった。もう一度挑戦してみよう。")
+		return
+	_play_sound(600.0, 0.08, 0.02, 0.02)
+	if _puzzle_is_solved():
+		puzzle_complete = true
+		message = "七羽の鳥がきれいに並んだ！"
+		_show_dialog("パズル完成！", "七色・七行・七列に一羽ずつ。鳥同士も隣り合っていません。")
+		_play_sound(720.0, 0.30, 0.02, 0.12)
+	else:
+		message = "鳥を置いた"
 
 func _handle_puzzle_input(pos: Vector2) -> void:
-	if Rect2(24, 670, 186, 42).has_point(pos):
-		_start_puzzle()
+	if Rect2(24, 650, 116, 56).has_point(pos):
+		if puzzle_failed or puzzle_complete:
+			_start_puzzle()
+		else:
+			puzzle_remove_mode = not puzzle_remove_mode
+			message = "戻す鳥をタップ" if puzzle_remove_mode else "鳥を置くモード"
 		return
-	if Rect2(222, 670, 186, 42).has_point(pos):
+	if Rect2(158, 650, 116, 56).has_point(pos):
+		if puzzle_hints > 0 and not puzzle_complete:
+			puzzle_hints -= 1
+			for row in range(7):
+				var column: int = int(PUZZLE_SOLUTION_COLUMNS[row])
+				if not bool(puzzle_birds[row][column]):
+					message = "ヒント：%d行目の%d列目を見てみよう" % [row + 1, column + 1]
+					return
+		message = "ヒントは残っていない"
+		return
+	if Rect2(292, 650, 116, 56).has_point(pos):
 		mode = Mode.HOME
 		return
-	var board := Rect2(PUZZLE_ORIGIN, Vector2(PUZZLE_CELL * 9.0, PUZZLE_CELL * 9.0))
-	if board.has_point(pos):
+	var board := Rect2(PUZZLE_ORIGIN, Vector2(PUZZLE_CELL * 7.0, PUZZLE_CELL * 7.0))
+	if board.has_point(pos) and not puzzle_complete:
 		var column := int((pos.x - PUZZLE_ORIGIN.x) / PUZZLE_CELL)
 		var row := int((pos.y - PUZZLE_ORIGIN.y) / PUZZLE_CELL)
-		if not bool(puzzle_givens[row][column]):
-			puzzle_selected = Vector2i(column, row)
-			_play_sound(420.0, 0.05, 0.02, 0.04)
-		else:
-			message = "最初から置かれた鉱石は動かせない"
-		return
-	if Rect2(27, 548, 378, 42).has_point(pos) and puzzle_selected.x >= 0 and not puzzle_complete:
-		var color_id := clampi(int((pos.x - 27.0) / 42.0), 0, 8)
-		puzzle_cells[puzzle_selected.y][puzzle_selected.x] = color_id
-		if _puzzle_is_solved():
-			puzzle_complete = true
-			message = "盤面が整った！"
-			_show_dialog("鉱石パズル完成！", "九つの鉱石を、すべての行・列・区画に一つずつ配置しました。")
-			_play_sound(720.0, 0.30, 0.02, 0.12)
-		elif _puzzle_has_conflict(puzzle_selected.y, puzzle_selected.x):
-			message = "同じ色が重なっている"
-			_play_sound(150.0, 0.10, 0.10, -0.20)
-		else:
-			message = "鉱石を配置した"
-			_play_sound(600.0, 0.08, 0.02, 0.02)
+		_puzzle_place(row, column)
 
 func _input(event: InputEvent) -> void:
 	var pressed := false
@@ -1135,43 +1171,39 @@ func _draw_home() -> void:
 	draw_string(JP_FONT, Vector2(36, 744), "盾：%s　　杖：%s" % [str(shield["name"]), str(wand["name"])], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("f2d092"))
 
 func _draw_puzzle() -> void:
-	draw_rect(Rect2(18, 16, 396, 108), Color(0.03, 0.07, 0.13, 0.90), true)
-	draw_string(JP_FONT, Vector2(38, 47), "鉱石パズル", HORIZONTAL_ALIGNMENT_LEFT, -1, 23, Color.WHITE)
-	draw_string(JP_FONT, Vector2(38, 74), "各行・列・3×3区画に、九色の鉱石を一つずつ。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("c9daf5"))
-	draw_string(JP_FONT, Vector2(38, 101), "マスを選んで、下の鉱石をタップ。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f2d092"))
-	for row in range(9):
-		for column in range(9):
+	draw_rect(Rect2(18, 16, 396, 166), Color(0.03, 0.07, 0.13, 0.90), true)
+	draw_string(JP_FONT, Vector2(38, 47), "Colordoku", HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Color.WHITE)
+	draw_string(JP_FONT, Vector2(38, 76), "色ごと・各行・各列に鳥を一羽ずつ置こう。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("c9daf5"))
+	draw_string(JP_FONT, Vector2(38, 101), "鳥同士は縦・横・斜めに隣り合えない。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("c9daf5"))
+	var bird_count := 0
+	for row in range(7):
+		for column in range(7):
+			if bool(puzzle_birds[row][column]):
+				bird_count += 1
+	draw_string(JP_FONT, Vector2(38, 136), "♥ %d　　鳥 %d / 7　　ヒント %d" % [puzzle_lives, bird_count, puzzle_hints], HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("f2d092"))
+	for row in range(7):
+		for column in range(7):
 			var cell_rect := Rect2(PUZZLE_ORIGIN + Vector2(column * PUZZLE_CELL, row * PUZZLE_CELL), Vector2(PUZZLE_CELL, PUZZLE_CELL))
-			var is_given := bool(puzzle_givens[row][column])
-			var value := int(puzzle_cells[row][column])
-			draw_rect(cell_rect.grow(-1.0), Color("24354d") if is_given else Color("172941"), true)
-			if value >= 0:
-				var center := cell_rect.get_center()
-				var gem_color: Color = PUZZLE_COLORS[value]
-				var radius := 13.5 if is_given else 11.5
-				draw_circle(center + Vector2(1.5, 2.0), radius, Color(0.01, 0.02, 0.05, 0.42))
-				draw_colored_polygon(PackedVector2Array([center + Vector2(0, -radius), center + Vector2(radius * 0.80, 0), center + Vector2(0, radius), center + Vector2(-radius * 0.80, 0)]), gem_color)
-				draw_circle(center + Vector2(-3.0, -4.0), radius * 0.28, Color(1.0, 1.0, 1.0, 0.34))
-			var border_color := Color("d96876") if _puzzle_has_conflict(row, column) else Color("49627d")
-			draw_rect(cell_rect, border_color, false, 1.0)
-			if puzzle_selected == Vector2i(column, row):
-				draw_rect(cell_rect.grow(-2.0), Color("f7e6a0"), false, 3.0)
-	for section in range(4):
-		var offset := float(section) * PUZZLE_CELL * 3.0
-		draw_line(PUZZLE_ORIGIN + Vector2(offset, 0), PUZZLE_ORIGIN + Vector2(offset, PUZZLE_CELL * 9.0), Color("b7d6ec"), 2.0)
-		draw_line(PUZZLE_ORIGIN + Vector2(0, offset), PUZZLE_ORIGIN + Vector2(PUZZLE_CELL * 9.0, offset), Color("b7d6ec"), 2.0)
-	draw_string(JP_FONT, Vector2(28, 534), "置く鉱石", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("d9e5ff"))
-	for color_id in range(9):
-		var palette_rect := Rect2(27 + color_id * 42, 548, 42, 42)
-		draw_rect(palette_rect.grow(-2.0), Color("25364c"), true)
-		var palette_center := palette_rect.get_center()
-		draw_circle(palette_center + Vector2(1.5, 2.0), 13.0, Color(0.01, 0.02, 0.05, 0.42))
-		draw_colored_polygon(PackedVector2Array([palette_center + Vector2(0, -13), palette_center + Vector2(10, 0), palette_center + Vector2(0, 13), palette_center + Vector2(-10, 0)]), PUZZLE_COLORS[color_id])
-		draw_rect(palette_rect.grow(-2.0), Color("f7e6a0") if puzzle_selected.x >= 0 and int(puzzle_cells[puzzle_selected.y][puzzle_selected.x]) == color_id else Color("5e7892"), false, 1.0)
-	var hint := "完成！　新しい盤面で再挑戦できる。" if puzzle_complete else message
-	draw_string(JP_FONT, Vector2(28, 622), hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("f2d092"))
-	_button(Rect2(24, 670, 186, 42), "新しい盤面", Color("496d7c"))
-	_button(Rect2(222, 670, 186, 42), "自室へ戻る", Color("3e4a61"))
+			var center := cell_rect.get_center()
+			var color_id := int(puzzle_solution[row][column])
+			draw_rect(cell_rect.grow(-2.0), PUZZLE_COLORS[color_id], true)
+			if bool(puzzle_blocked[row][column]):
+				draw_line(center + Vector2(-11, -11), center + Vector2(11, 11), Color.WHITE, 5.0)
+				draw_line(center + Vector2(11, -11), center + Vector2(-11, 11), Color.WHITE, 5.0)
+			if bool(puzzle_birds[row][column]):
+				draw_circle(center + Vector2(0, 2), 14, Color(0.02, 0.08, 0.16, 0.35))
+				draw_circle(center, 13, Color("77d9f4"))
+				draw_circle(center + Vector2(0, -9), 8, Color("8be4fb"))
+				draw_circle(center + Vector2(-3, -10), 2.8, Color.WHITE)
+				draw_circle(center + Vector2(3, -10), 2.8, Color.WHITE)
+				draw_circle(center + Vector2(-3, -10), 1.2, Color("15243a"))
+				draw_circle(center + Vector2(3, -10), 1.2, Color("15243a"))
+				draw_colored_polygon(PackedVector2Array([center + Vector2(-2, -6), center + Vector2(4, -6), center + Vector2(1, -3)]), Color("f3ae55"))
+			draw_rect(cell_rect, Color("f1d798"), false, 1.2)
+	draw_string(JP_FONT, Vector2(27, 594), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f2d092"))
+	_button(Rect2(24, 650, 116, 56), "もう一度" if puzzle_failed else ("新しい盤面" if puzzle_complete else "鳥を戻す"), Color("9b8050") if puzzle_failed else (Color("536f7b") if puzzle_remove_mode else Color("3e4a61")))
+	_button(Rect2(158, 650, 116, 56), "ヒント %d" % puzzle_hints, Color("9b8050"))
+	_button(Rect2(292, 650, 116, 56), "戻る", Color("3e4a61"))
 
 func _draw_boss_select() -> void:
 	draw_rect(Rect2(18, 18, 396, 90), Color(0.02, 0.04, 0.10, 0.86), true)
