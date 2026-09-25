@@ -24,8 +24,37 @@ const RECALL_CHANT_DURATION := 5.2
 const SHIELD_POINT_BONUS := 0.08
 const RESONANCE_GUARD_GOAL := 45.0
 const PRINCESS_HP_MAX := 50
+const PUZZLE_ORIGIN := Vector2(27, 145)
+const PUZZLE_CELL := 42.0
+const PUZZLE_COLORS := [
+	Color("df6b83"), Color("e99a56"), Color("e8d36e"),
+	Color("9acb71"), Color("57c4a7"), Color("64afd9"),
+	Color("7186dc"), Color("a27bd9"), Color("d47db7"),
+]
+const PUZZLE_SOLUTION := [
+	[5, 3, 4, 6, 7, 8, 9, 1, 2],
+	[6, 7, 2, 1, 9, 5, 3, 4, 8],
+	[1, 9, 8, 3, 4, 2, 5, 6, 7],
+	[8, 5, 9, 7, 6, 1, 4, 2, 3],
+	[4, 2, 6, 8, 5, 3, 7, 9, 1],
+	[7, 1, 3, 9, 2, 4, 8, 5, 6],
+	[9, 6, 1, 5, 3, 7, 2, 8, 4],
+	[2, 8, 7, 4, 1, 9, 6, 3, 5],
+	[3, 4, 5, 2, 8, 6, 1, 7, 9],
+]
+const PUZZLE_GIVENS := [
+	[5, 3, 0, 0, 7, 0, 0, 0, 0],
+	[6, 0, 0, 1, 9, 5, 0, 0, 0],
+	[0, 9, 8, 0, 0, 0, 0, 6, 0],
+	[8, 0, 0, 0, 6, 0, 0, 0, 3],
+	[4, 0, 0, 8, 0, 3, 0, 0, 1],
+	[7, 0, 0, 0, 2, 0, 0, 0, 6],
+	[0, 6, 0, 0, 0, 0, 2, 8, 0],
+	[0, 0, 0, 4, 1, 9, 0, 0, 5],
+	[0, 0, 0, 0, 8, 0, 0, 7, 9],
+]
 
-enum Mode { TITLE, HOME, ARMORER, WANDER, BATTLE, RECALL, DOWNED, RESULTS }
+enum Mode { TITLE, HOME, ARMORER, WANDER, PUZZLE, BATTLE, RECALL, DOWNED, RESULTS }
 enum TitlePanel { MAIN, CONTINUE, NEW_GAME }
 enum HomePanel { MAIN, EQUIPMENT, WAND_EQUIPMENT, BOSS_SELECT }
 const SAVE_KEY_PREFIX := "shield-tap-save-v2-"
@@ -145,6 +174,11 @@ var dialog_title := ""
 var dialog_body := ""
 var last_press_msec := -1000
 var last_press_pos := Vector2(-999.0, -999.0)
+var puzzle_solution: Array = []
+var puzzle_cells: Array = []
+var puzzle_givens: Array = []
+var puzzle_selected := Vector2i(-1, -1)
+var puzzle_complete := false
 
 const PATTERN := [
 	{"kind": "stone", "wait": 0.34}, {"kind": "stone", "wait": 0.28},
@@ -721,6 +755,87 @@ func _equip_wand(id: String) -> void:
 	home_panel = HomePanel.MAIN
 	_show_dialog("杖を装備した", "%s\n%s\n次の戦闘リザルトで保存されます。" % [str(wand["name"]), _wand_stats_text(wand)])
 
+func _start_puzzle() -> void:
+	var color_order := range(9)
+	color_order.shuffle()
+	puzzle_solution.clear()
+	puzzle_cells.clear()
+	puzzle_givens.clear()
+	for row in range(9):
+		var solution_row: Array = []
+		var cells_row: Array = []
+		var givens_row: Array = []
+		for column in range(9):
+			var value := int(PUZZLE_SOLUTION[row][column]) - 1
+			var color_id := int(color_order[value])
+			solution_row.append(color_id)
+			var is_given := int(PUZZLE_GIVENS[row][column]) != 0
+			cells_row.append(color_id if is_given else -1)
+			givens_row.append(is_given)
+		puzzle_solution.append(solution_row)
+		puzzle_cells.append(cells_row)
+		puzzle_givens.append(givens_row)
+	puzzle_selected = Vector2i(-1, -1)
+	puzzle_complete = false
+	message = "鉱石を並べて、盤面を整えよう"
+	mode = Mode.PUZZLE
+
+func _puzzle_has_conflict(row: int, column: int) -> bool:
+	var value := int(puzzle_cells[row][column])
+	if value < 0:
+		return false
+	for index in range(9):
+		if index != column and int(puzzle_cells[row][index]) == value:
+			return true
+		if index != row and int(puzzle_cells[index][column]) == value:
+			return true
+	var box_row := (row / 3) * 3
+	var box_column := (column / 3) * 3
+	for box_y in range(box_row, box_row + 3):
+		for box_x in range(box_column, box_column + 3):
+			if (box_y != row or box_x != column) and int(puzzle_cells[box_y][box_x]) == value:
+				return true
+	return false
+
+func _puzzle_is_solved() -> bool:
+	for row in range(9):
+		for column in range(9):
+			if int(puzzle_cells[row][column]) != int(puzzle_solution[row][column]):
+				return false
+	return true
+
+func _handle_puzzle_input(pos: Vector2) -> void:
+	if Rect2(24, 670, 186, 42).has_point(pos):
+		_start_puzzle()
+		return
+	if Rect2(222, 670, 186, 42).has_point(pos):
+		mode = Mode.HOME
+		return
+	var board := Rect2(PUZZLE_ORIGIN, Vector2(PUZZLE_CELL * 9.0, PUZZLE_CELL * 9.0))
+	if board.has_point(pos):
+		var column := int((pos.x - PUZZLE_ORIGIN.x) / PUZZLE_CELL)
+		var row := int((pos.y - PUZZLE_ORIGIN.y) / PUZZLE_CELL)
+		if not bool(puzzle_givens[row][column]):
+			puzzle_selected = Vector2i(column, row)
+			_play_sound(420.0, 0.05, 0.02, 0.04)
+		else:
+			message = "最初から置かれた鉱石は動かせない"
+		return
+	if Rect2(27, 548, 378, 42).has_point(pos) and puzzle_selected.x >= 0 and not puzzle_complete:
+		var color_id := clampi(int((pos.x - 27.0) / 42.0), 0, 8)
+		puzzle_cells[puzzle_selected.y][puzzle_selected.x] = color_id
+		if _puzzle_is_solved():
+			puzzle_complete = true
+			message = "盤面が整った！"
+			_show_dialog("鉱石パズル完成！", "九つの鉱石を、すべての行・列・区画に一つずつ配置しました。")
+			_play_sound(720.0, 0.30, 0.02, 0.12)
+		elif _puzzle_has_conflict(puzzle_selected.y, puzzle_selected.x):
+			message = "同じ色が重なっている"
+			_play_sound(150.0, 0.10, 0.10, -0.20)
+		else:
+			message = "鉱石を配置した"
+			_play_sound(600.0, 0.08, 0.02, 0.02)
+
 func _input(event: InputEvent) -> void:
 	var pressed := false
 	var released := false
@@ -776,6 +891,9 @@ func _input(event: InputEvent) -> void:
 				return
 		if Rect2(40, 594, 352, 48).has_point(pos):
 			title_panel = TitlePanel.MAIN
+		return
+	if mode == Mode.PUZZLE:
+		_handle_puzzle_input(pos)
 		return
 	if mode == Mode.HOME:
 		if home_panel == HomePanel.EQUIPMENT:
@@ -835,6 +953,8 @@ func _input(event: InputEvent) -> void:
 			mode = Mode.WANDER
 			wand_shop_page = 0
 			message = "王女のための杖を選ぼう"
+		elif Rect2(20, 676, 392, 42).has_point(pos):
+			_start_puzzle()
 		return
 	if mode == Mode.ARMORER:
 		var recipe_start := 1 + armorer_page * COLLECTION_PER_PAGE
@@ -931,7 +1051,7 @@ func _fill_audio() -> void:
 
 func _draw() -> void:
 	var background := ART
-	if mode in [Mode.TITLE, Mode.HOME, Mode.WANDER]:
+	if mode in [Mode.TITLE, Mode.HOME, Mode.WANDER, Mode.PUZZLE]:
 		background = HOME_ART
 	elif mode == Mode.ARMORER:
 		background = ARMORER_ART
@@ -947,6 +1067,8 @@ func _draw() -> void:
 		_draw_armorer()
 	elif mode == Mode.WANDER:
 		_draw_wander()
+	elif mode == Mode.PUZZLE:
+		_draw_puzzle()
 	elif mode == Mode.RESULTS:
 		_draw_battle()
 		_draw_results()
@@ -1007,10 +1129,49 @@ func _draw_home() -> void:
 	_button(Rect2(226, 552, 186, 52), "防具屋へ", Color("785a45"))
 	_button(Rect2(20, 616, 186, 52), "杖を装備", Color("66547f"))
 	_button(Rect2(226, 616, 186, 52), "杖屋へ", Color("7d4f72"))
+	_button(Rect2(20, 676, 392, 42), "パズル", Color("4c6a73"))
 	var shield := _shield_data(equipped_shield)
 	var wand := _wand_data(equipped_wand)
-	draw_string(JP_FONT, Vector2(36, 700), "盾：%s　　杖：%s" % [str(shield["name"]), str(wand["name"])], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("f2d092"))
-	draw_string(JP_FONT, Vector2(36, 722), _wand_stats_text(wand), HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("d9e5ff"))
+	draw_string(JP_FONT, Vector2(36, 744), "盾：%s　　杖：%s" % [str(shield["name"]), str(wand["name"])], HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("f2d092"))
+
+func _draw_puzzle() -> void:
+	draw_rect(Rect2(18, 16, 396, 108), Color(0.03, 0.07, 0.13, 0.90), true)
+	draw_string(JP_FONT, Vector2(38, 47), "鉱石パズル", HORIZONTAL_ALIGNMENT_LEFT, -1, 23, Color.WHITE)
+	draw_string(JP_FONT, Vector2(38, 74), "各行・列・3×3区画に、九色の鉱石を一つずつ。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("c9daf5"))
+	draw_string(JP_FONT, Vector2(38, 101), "マスを選んで、下の鉱石をタップ。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f2d092"))
+	for row in range(9):
+		for column in range(9):
+			var cell_rect := Rect2(PUZZLE_ORIGIN + Vector2(column * PUZZLE_CELL, row * PUZZLE_CELL), Vector2(PUZZLE_CELL, PUZZLE_CELL))
+			var is_given := bool(puzzle_givens[row][column])
+			var value := int(puzzle_cells[row][column])
+			draw_rect(cell_rect.grow(-1.0), Color("24354d") if is_given else Color("172941"), true)
+			if value >= 0:
+				var center := cell_rect.get_center()
+				var gem_color: Color = PUZZLE_COLORS[value]
+				var radius := 13.5 if is_given else 11.5
+				draw_circle(center + Vector2(1.5, 2.0), radius, Color(0.01, 0.02, 0.05, 0.42))
+				draw_colored_polygon(PackedVector2Array([center + Vector2(0, -radius), center + Vector2(radius * 0.80, 0), center + Vector2(0, radius), center + Vector2(-radius * 0.80, 0)]), gem_color)
+				draw_circle(center + Vector2(-3.0, -4.0), radius * 0.28, Color(1.0, 1.0, 1.0, 0.34))
+			var border_color := Color("d96876") if _puzzle_has_conflict(row, column) else Color("49627d")
+			draw_rect(cell_rect, border_color, false, 1.0)
+			if puzzle_selected == Vector2i(column, row):
+				draw_rect(cell_rect.grow(-2.0), Color("f7e6a0"), false, 3.0)
+	for section in range(4):
+		var offset := float(section) * PUZZLE_CELL * 3.0
+		draw_line(PUZZLE_ORIGIN + Vector2(offset, 0), PUZZLE_ORIGIN + Vector2(offset, PUZZLE_CELL * 9.0), Color("b7d6ec"), 2.0)
+		draw_line(PUZZLE_ORIGIN + Vector2(0, offset), PUZZLE_ORIGIN + Vector2(PUZZLE_CELL * 9.0, offset), Color("b7d6ec"), 2.0)
+	draw_string(JP_FONT, Vector2(28, 534), "置く鉱石", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("d9e5ff"))
+	for color_id in range(9):
+		var palette_rect := Rect2(27 + color_id * 42, 548, 42, 42)
+		draw_rect(palette_rect.grow(-2.0), Color("25364c"), true)
+		var palette_center := palette_rect.get_center()
+		draw_circle(palette_center + Vector2(1.5, 2.0), 13.0, Color(0.01, 0.02, 0.05, 0.42))
+		draw_colored_polygon(PackedVector2Array([palette_center + Vector2(0, -13), palette_center + Vector2(10, 0), palette_center + Vector2(0, 13), palette_center + Vector2(-10, 0)]), PUZZLE_COLORS[color_id])
+		draw_rect(palette_rect.grow(-2.0), Color("f7e6a0") if puzzle_selected.x >= 0 and int(puzzle_cells[puzzle_selected.y][puzzle_selected.x]) == color_id else Color("5e7892"), false, 1.0)
+	var hint := "完成！　新しい盤面で再挑戦できる。" if puzzle_complete else message
+	draw_string(JP_FONT, Vector2(28, 622), hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color("f2d092"))
+	_button(Rect2(24, 670, 186, 42), "新しい盤面", Color("496d7c"))
+	_button(Rect2(222, 670, 186, 42), "自室へ戻る", Color("3e4a61"))
 
 func _draw_boss_select() -> void:
 	draw_rect(Rect2(18, 18, 396, 90), Color(0.02, 0.04, 0.10, 0.86), true)
