@@ -27,7 +27,15 @@ const PRINCESS_HP_MAX := 50
 const PUZZLE_ORIGIN := Vector2(34, 205)
 const PUZZLE_CELL := 52.0
 const PUZZLE_COLORS := [Color("e6c84e"), Color("ac91ec"), Color("ee8b4e"), Color("81c36c"), Color("e57dc1"), Color("4fa9c6"), Color("4b83c5")]
-const PUZZLE_SOLUTION_COLUMNS := [1, 3, 5, 0, 2, 4, 6]
+const PUZZLE_SIZE := 7
+const PUZZLE_TAP_WINDOW_MSEC := 350
+# Each color is one edge-connected region. The first two stages reveal birds to ease players in.
+# Stages were checked for a unique answer under the row/column/color/non-touching rules.
+const PUZZLE_STAGES := [
+	{"rows": ["0000111", "0221111", "2222113", "2252113", "5254663", "5554633", "5556666"], "birds": [0, 5, 2, 6, 3, 1, 4], "fixed": 2},
+	{"rows": ["1100000", "1112000", "1112200", "1442233", "4442233", "4444225", "6444255"], "birds": [4, 1, 3, 5, 2, 6, 0], "fixed": 1},
+	{"rows": ["2444100", "2444111", "2244113", "2244333", "5444444", "5444444", "5546444"], "birds": [6, 4, 1, 5, 2, 0, 3], "fixed": 0},
+]
 
 enum Mode { TITLE, HOME, ARMORER, WANDER, PUZZLE, BATTLE, RECALL, DOWNED, RESULTS }
 enum TitlePanel { MAIN, CONTINUE, NEW_GAME }
@@ -149,15 +157,20 @@ var dialog_title := ""
 var dialog_body := ""
 var last_press_msec := -1000
 var last_press_pos := Vector2(-999.0, -999.0)
+var last_press_touch := false
+var puzzle_level := 0
 var puzzle_solution: Array = []
+var puzzle_answer: Array = []
 var puzzle_birds: Array = []
 var puzzle_fixed: Array = []
-var puzzle_blocked: Array = []
-var puzzle_remove_mode := false
-var puzzle_hints := 5
+var puzzle_notes: Array = []
+var puzzle_wrong: Array = []
 var puzzle_lives := 3
-var puzzle_failed := false
 var puzzle_complete := false
+var puzzle_clear_time := 0.0
+var puzzle_tap_row := -1
+var puzzle_tap_column := -1
+var puzzle_tap_msec := 0
 
 const PATTERN := [
 	{"kind": "stone", "wait": 0.34}, {"kind": "stone", "wait": 0.28},
@@ -213,6 +226,16 @@ func _unlock_audio() -> void:
 func _process(delta: float) -> void:
 	_fill_audio()
 	flash = maxf(0.0, flash - delta)
+	if mode == Mode.PUZZLE:
+		if puzzle_complete:
+			puzzle_clear_time -= delta
+			if puzzle_clear_time <= 0.0:
+				puzzle_level += 1
+				_save_progress()
+				_start_puzzle()
+		elif puzzle_tap_row >= 0 and Time.get_ticks_msec() - puzzle_tap_msec >= PUZZLE_TAP_WINDOW_MSEC:
+			_puzzle_toggle_note(puzzle_tap_row, puzzle_tap_column)
+			puzzle_tap_row = -1
 	if mode in [Mode.BATTLE, Mode.RECALL, Mode.DOWNED]:
 		_process_expedition(delta)
 	queue_redraw()
@@ -237,6 +260,7 @@ func _load_save_slots() -> void:
 		save_slots.append(_read_slot(slot))
 
 func _apply_save(data: Dictionary) -> void:
+	puzzle_level = maxi(0, int(data.get("puzzle_level", 0)))
 	arm_level = int(data.get("arm_level", 1))
 	level_xp = float(data.get("level_xp", 0.0))
 	# Older saves stored earned experience until sleeping. Fold it into the permanent total on load.
@@ -282,6 +306,7 @@ func _save_progress() -> void:
 		return
 	var data := {
 		"arm_level": arm_level, "level_xp": level_xp, "pending_xp": 0.0,
+		"puzzle_level": puzzle_level,
 		"ore": ore, "base_cap": base_cap, "owned_shields": owned_shields,
 		"equipped_shield": equipped_shield, "owned_wands": owned_wands,
 		"equipped_wand": equipped_wand,
@@ -295,6 +320,7 @@ func _save_progress() -> void:
 
 func _new_game(slot: int) -> void:
 	selected_slot = slot
+	puzzle_level = 0
 	arm_level = 1
 	level_xp = 0.0
 	pending_xp = 0.0
@@ -734,143 +760,129 @@ func _equip_wand(id: String) -> void:
 	home_panel = HomePanel.MAIN
 	_show_dialog("杖を装備した", "%s\n%s\n次の戦闘リザルトで保存されます。" % [str(wand["name"]), _wand_stats_text(wand)])
 
+func _puzzle_transform(row: int, column: int, variant: int) -> Vector2i:
+	var transformed_row := row
+	var transformed_column := column
+	if (variant & 1) != 0:
+		transformed_column = PUZZLE_SIZE - 1 - transformed_column
+	if (variant & 2) != 0:
+		transformed_row = PUZZLE_SIZE - 1 - transformed_row
+	if (variant & 4) != 0:
+		var swap := transformed_row
+		transformed_row = transformed_column
+		transformed_column = swap
+	return Vector2i(transformed_column, transformed_row)
+
 func _start_puzzle() -> void:
 	puzzle_solution.clear()
+	puzzle_answer.clear()
 	puzzle_birds.clear()
 	puzzle_fixed.clear()
-	puzzle_blocked.clear()
-	puzzle_hints = 5
+	puzzle_notes.clear()
+	puzzle_wrong.clear()
 	puzzle_lives = 3
-	puzzle_failed = false
-	puzzle_remove_mode = false
 	puzzle_complete = false
-	for row in range(7):
+	puzzle_clear_time = 0.0
+	puzzle_tap_row = -1
+	var stage: Dictionary = PUZZLE_STAGES[puzzle_level % PUZZLE_STAGES.size()]
+	var variant := floori(float(puzzle_level / PUZZLE_STAGES.size())) % 8
+	for row in range(PUZZLE_SIZE):
 		var colors_row: Array = []
 		var birds_row: Array = []
 		var fixed_row: Array = []
-		var blocked_row: Array = []
-		for column in range(7):
-			colors_row.append((row + column) % 7)
+		var notes_row: Array = []
+		var wrong_row: Array = []
+		for column in range(PUZZLE_SIZE):
+			colors_row.append(-1)
 			birds_row.append(false)
 			fixed_row.append(false)
-			var is_solution_cell: bool = column == int(PUZZLE_SOLUTION_COLUMNS[row])
-			blocked_row.append(not is_solution_cell and ((row * 5 + column * 3) % 8 == 0))
+			notes_row.append(false)
+			wrong_row.append(false)
 		puzzle_solution.append(colors_row)
+		puzzle_answer.append(-1)
 		puzzle_birds.append(birds_row)
 		puzzle_fixed.append(fixed_row)
-		puzzle_blocked.append(blocked_row)
-	for row in range(2):
-		var column: int = int(PUZZLE_SOLUTION_COLUMNS[row])
-		puzzle_birds[row][column] = true
-		puzzle_fixed[row][column] = true
-	message = "各色・各行・各列に鳥を一羽。鳥同士は隣り合えない。"
+		puzzle_notes.append(notes_row)
+		puzzle_wrong.append(wrong_row)
+	for source_row in range(PUZZLE_SIZE):
+		for source_column in range(PUZZLE_SIZE):
+			var cell := _puzzle_transform(source_row, source_column, variant)
+			var color_id: int = str(stage["rows"][source_row]).substr(source_column, 1).to_int()
+			puzzle_solution[cell.y][cell.x] = color_id
+			if source_column == int(stage["birds"][source_row]):
+				puzzle_answer[cell.y] = cell.x
+				if source_row < int(stage["fixed"]):
+					puzzle_birds[cell.y][cell.x] = true
+					puzzle_fixed[cell.y][cell.x] = true
+	message = "1回タップで白い×、同じマスを素早く2回で開く"
 	mode = Mode.PUZZLE
 
-func _puzzle_conflict(row: int, column: int) -> bool:
-	if not bool(puzzle_birds[row][column]):
-		return false
-	var color_id := int(puzzle_solution[row][column])
-	for index in range(7):
-		if index != column and bool(puzzle_birds[row][index]):
-			return true
-		if index != row and bool(puzzle_birds[index][column]):
-			return true
-	for other_row in range(7):
-		for other_column in range(7):
-			if (other_row != row or other_column != column) and bool(puzzle_birds[other_row][other_column]):
-				if int(puzzle_solution[other_row][other_column]) == color_id:
-					return true
-				if absi(other_row - row) <= 1 and absi(other_column - column) <= 1:
-					return true
-	return false
+func _puzzle_count_found() -> int:
+	var count := 0
+	for row in range(PUZZLE_SIZE):
+		if bool(puzzle_birds[row][int(puzzle_answer[row])]):
+			count += 1
+	return count
 
-func _puzzle_is_solved() -> bool:
-	for row in range(7):
-		var row_count := 0
-		for column in range(7):
-			if bool(puzzle_birds[row][column]):
-				row_count += 1
-		if row_count != 1:
-			return false
-	for column in range(7):
-		var column_count := 0
-		for row in range(7):
-			if bool(puzzle_birds[row][column]):
-				column_count += 1
-		if column_count != 1:
-			return false
-	var colors_seen: Array = []
-	for row in range(7):
-		for column in range(7):
-			if bool(puzzle_birds[row][column]):
-				var color_id := int(puzzle_solution[row][column])
-				if colors_seen.has(color_id):
-					return false
-				colors_seen.append(color_id)
-	return colors_seen.size() == 7
+func _puzzle_toggle_note(row: int, column: int) -> void:
+	if bool(puzzle_birds[row][column]) or bool(puzzle_wrong[row][column]):
+		return
+	puzzle_notes[row][column] = not bool(puzzle_notes[row][column])
+	message = "白い×をメモした" if bool(puzzle_notes[row][column]) else "白い×を消した"
 
-func _puzzle_place(row: int, column: int) -> void:
-	if bool(puzzle_birds[row][column]):
-		if puzzle_remove_mode and not bool(puzzle_fixed[row][column]):
-			puzzle_birds[row][column] = false
-			puzzle_remove_mode = false
-			message = "鳥を一羽戻した"
-		else:
-			message = "そこにはもう鳥がいる"
+func _puzzle_open(row: int, column: int) -> void:
+	if puzzle_complete or bool(puzzle_birds[row][column]) or bool(puzzle_wrong[row][column]):
 		return
-	if puzzle_remove_mode:
-		puzzle_remove_mode = false
-		message = "戻す鳥のマスをタップしてね"
-		return
-	if bool(puzzle_blocked[row][column]):
-		message = "そこには置けない"
-		return
-	puzzle_birds[row][column] = true
-	if _puzzle_conflict(row, column):
-		puzzle_birds[row][column] = false
-		puzzle_lives -= 1
-		message = "ルール違反！　残りハート %d" % puzzle_lives
-		_play_sound(150.0, 0.10, 0.10, -0.20)
-		if puzzle_lives <= 0:
-			puzzle_failed = true
+	puzzle_notes[row][column] = false
+	if column == int(puzzle_answer[row]):
+		puzzle_birds[row][column] = true
+		_play_sound(600.0, 0.08, 0.02, 0.02)
+		if _puzzle_count_found() == PUZZLE_SIZE:
 			puzzle_complete = true
-			_show_dialog("ゲームオーバー", "ハートがなくなった。もう一度挑戦してみよう。")
+			puzzle_clear_time = 1.8
+			message = "クリア！　次のレベルへ"
+			_play_sound(720.0, 0.30, 0.02, 0.12)
+		else:
+			message = "鳥を発見！"
 		return
-	_play_sound(600.0, 0.08, 0.02, 0.02)
-	if _puzzle_is_solved():
-		puzzle_complete = true
-		message = "七羽の鳥がきれいに並んだ！"
-		_show_dialog("パズル完成！", "七色・七行・七列に一羽ずつ。鳥同士も隣り合っていません。")
-		_play_sound(720.0, 0.30, 0.02, 0.12)
+	puzzle_wrong[row][column] = true
+	puzzle_lives -= 1
+	_play_sound(150.0, 0.10, 0.10, -0.20)
+	if puzzle_lives <= 0:
+		puzzle_tap_row = -1
+		home_panel = HomePanel.MAIN
+		mode = Mode.HOME
+		message = "パズル Lv.%d 失敗。次回は同じ盤面から再挑戦" % (puzzle_level + 1)
+		_show_dialog("ゲームオーバー", "ハートがなくなった。自室へ戻ります。\n次は同じレベルを最初から遊べます。")
 	else:
-		message = "鳥を置いた"
+		message = "鳥はいなかった。残りハート %d" % puzzle_lives
 
 func _handle_puzzle_input(pos: Vector2) -> void:
-	if Rect2(24, 650, 116, 56).has_point(pos):
-		if puzzle_failed or puzzle_complete:
-			_start_puzzle()
-		else:
-			puzzle_remove_mode = not puzzle_remove_mode
-			message = "戻す鳥をタップ" if puzzle_remove_mode else "鳥を置くモード"
+	if puzzle_complete:
 		return
-	if Rect2(158, 650, 116, 56).has_point(pos):
-		if puzzle_hints > 0 and not puzzle_complete:
-			puzzle_hints -= 1
-			for row in range(7):
-				var column: int = int(PUZZLE_SOLUTION_COLUMNS[row])
-				if not bool(puzzle_birds[row][column]):
-					message = "ヒント：%d行目の%d列目を見てみよう" % [row + 1, column + 1]
-					return
-		message = "ヒントは残っていない"
-		return
-	if Rect2(292, 650, 116, 56).has_point(pos):
+	if Rect2(24, 650, 384, 56).has_point(pos):
+		puzzle_tap_row = -1
+		home_panel = HomePanel.MAIN
 		mode = Mode.HOME
 		return
-	var board := Rect2(PUZZLE_ORIGIN, Vector2(PUZZLE_CELL * 7.0, PUZZLE_CELL * 7.0))
-	if board.has_point(pos) and not puzzle_complete:
-		var column := int((pos.x - PUZZLE_ORIGIN.x) / PUZZLE_CELL)
-		var row := int((pos.y - PUZZLE_ORIGIN.y) / PUZZLE_CELL)
-		_puzzle_place(row, column)
+	var board := Rect2(PUZZLE_ORIGIN, Vector2(PUZZLE_CELL * PUZZLE_SIZE, PUZZLE_CELL * PUZZLE_SIZE))
+	if not board.has_point(pos):
+		return
+	var column := int((pos.x - PUZZLE_ORIGIN.x) / PUZZLE_CELL)
+	var row := int((pos.y - PUZZLE_ORIGIN.y) / PUZZLE_CELL)
+	if bool(puzzle_birds[row][column]) or bool(puzzle_wrong[row][column]):
+		puzzle_tap_row = -1
+		return
+	var now_msec := Time.get_ticks_msec()
+	if puzzle_tap_row == row and puzzle_tap_column == column and now_msec - puzzle_tap_msec <= PUZZLE_TAP_WINDOW_MSEC:
+		puzzle_tap_row = -1
+		_puzzle_open(row, column)
+		return
+	if puzzle_tap_row >= 0:
+		_puzzle_toggle_note(puzzle_tap_row, puzzle_tap_column)
+	puzzle_tap_row = row
+	puzzle_tap_column = column
+	puzzle_tap_msec = now_msec
 
 func _input(event: InputEvent) -> void:
 	var pressed := false
@@ -889,13 +901,14 @@ func _input(event: InputEvent) -> void:
 		return
 	if not pressed:
 		return
-	# Mobile browsers can report one physical tap as both touch and mouse input.
-	# Ignore only the immediate duplicate at the same position, so it cannot act on a new screen.
+	# Ignore Safari's mouse event following a touch, but keep two real taps for opening a cell.
 	var now_msec := Time.get_ticks_msec()
-	if now_msec - last_press_msec < 180 and pos.distance_to(last_press_pos) < 10.0:
+	var is_touch := event is InputEventScreenTouch
+	if now_msec - last_press_msec < 180 and pos.distance_to(last_press_pos) < 10.0 and is_touch != last_press_touch:
 		return
 	last_press_msec = now_msec
 	last_press_pos = pos
+	last_press_touch = is_touch
 	_unlock_audio()
 	if dialog_visible:
 		dialog_visible = false
@@ -1118,7 +1131,7 @@ func _draw_title() -> void:
 	draw_string(JP_FONT, Vector2(62, 145), "護衛のリズム", HORIZONTAL_ALIGNMENT_LEFT, -1, 35, Color.WHITE)
 	draw_string(JP_FONT, Vector2(62, 180), "王女を守り、巨像に挑む。", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("d7c9f5"))
 	if title_panel == TitlePanel.MAIN:
-		draw_string(JP_FONT, Vector2(62, 218), "戦闘リザルトで、この端末へ保存されます。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("a9bfdc"))
+		draw_string(JP_FONT, Vector2(62, 218), "戦闘リザルトとパズルクリア時に保存されます。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("a9bfdc"))
 		_button(Rect2(40, 390, 352, 58), "つづきから", Color("4d6680"))
 		_button(Rect2(40, 464, 352, 58), "はじめから", Color("76516f"))
 		return
@@ -1172,22 +1185,20 @@ func _draw_home() -> void:
 
 func _draw_puzzle() -> void:
 	draw_rect(Rect2(18, 16, 396, 166), Color(0.03, 0.07, 0.13, 0.90), true)
-	draw_string(JP_FONT, Vector2(38, 47), "Colordoku", HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Color.WHITE)
-	draw_string(JP_FONT, Vector2(38, 76), "色ごと・各行・各列に鳥を一羽ずつ置こう。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("c9daf5"))
-	draw_string(JP_FONT, Vector2(38, 101), "鳥同士は縦・横・斜めに隣り合えない。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("c9daf5"))
-	var bird_count := 0
-	for row in range(7):
-		for column in range(7):
-			if bool(puzzle_birds[row][column]):
-				bird_count += 1
-	draw_string(JP_FONT, Vector2(38, 136), "♥ %d　　鳥 %d / 7　　ヒント %d" % [puzzle_lives, bird_count, puzzle_hints], HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("f2d092"))
-	for row in range(7):
-		for column in range(7):
+	draw_string(JP_FONT, Vector2(38, 47), "鳥さがし　Lv.%d" % (puzzle_level + 1), HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Color.WHITE)
+	draw_string(JP_FONT, Vector2(38, 76), "各色・各行・各列に鳥が一羽ずつ。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("c9daf5"))
+	draw_string(JP_FONT, Vector2(38, 101), "鳥同士は斜めも含めて隣り合わない。", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("c9daf5"))
+	draw_string(JP_FONT, Vector2(38, 136), "♥ %d　　発見 %d / %d" % [puzzle_lives, _puzzle_count_found(), PUZZLE_SIZE], HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("f2d092"))
+	for row in range(PUZZLE_SIZE):
+		for column in range(PUZZLE_SIZE):
 			var cell_rect := Rect2(PUZZLE_ORIGIN + Vector2(column * PUZZLE_CELL, row * PUZZLE_CELL), Vector2(PUZZLE_CELL, PUZZLE_CELL))
 			var center := cell_rect.get_center()
 			var color_id := int(puzzle_solution[row][column])
 			draw_rect(cell_rect.grow(-2.0), PUZZLE_COLORS[color_id], true)
-			if bool(puzzle_blocked[row][column]):
+			if bool(puzzle_wrong[row][column]):
+				draw_line(center + Vector2(-11, -11), center + Vector2(11, 11), Color("eb473e"), 5.0)
+				draw_line(center + Vector2(11, -11), center + Vector2(-11, 11), Color("eb473e"), 5.0)
+			elif bool(puzzle_notes[row][column]):
 				draw_line(center + Vector2(-11, -11), center + Vector2(11, 11), Color.WHITE, 5.0)
 				draw_line(center + Vector2(11, -11), center + Vector2(-11, 11), Color.WHITE, 5.0)
 			if bool(puzzle_birds[row][column]):
@@ -1199,11 +1210,18 @@ func _draw_puzzle() -> void:
 				draw_circle(center + Vector2(-3, -10), 1.2, Color("15243a"))
 				draw_circle(center + Vector2(3, -10), 1.2, Color("15243a"))
 				draw_colored_polygon(PackedVector2Array([center + Vector2(-2, -6), center + Vector2(4, -6), center + Vector2(1, -3)]), Color("f3ae55"))
-			draw_rect(cell_rect, Color("f1d798"), false, 1.2)
+			if bool(puzzle_fixed[row][column]):
+				draw_rect(cell_rect.grow(-3.0), Color("f8f8e2"), false, 3.0)
+			else:
+				draw_rect(cell_rect, Color("f1d798"), false, 1.2)
 	draw_string(JP_FONT, Vector2(27, 594), message, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("f2d092"))
-	_button(Rect2(24, 650, 116, 56), "もう一度" if puzzle_failed else ("新しい盤面" if puzzle_complete else "鳥を戻す"), Color("9b8050") if puzzle_failed else (Color("536f7b") if puzzle_remove_mode else Color("3e4a61")))
-	_button(Rect2(158, 650, 116, 56), "ヒント %d" % puzzle_hints, Color("9b8050"))
-	_button(Rect2(292, 650, 116, 56), "戻る", Color("3e4a61"))
+	draw_string(JP_FONT, Vector2(27, 621), "白い×はもう一度タップで消去。ダブルタップで開く。", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("c9daf5"))
+	_button(Rect2(24, 650, 384, 56), "自室へ戻る", Color("3e4a61"))
+	if puzzle_complete:
+		draw_rect(Rect2(30, 335, 372, 110), Color(0.03, 0.08, 0.17, 0.91), true)
+		draw_rect(Rect2(30, 335, 372, 110), Color("f2d092"), false, 2.0)
+		draw_string(JP_FONT, Vector2(95, 385), "ステージクリア！", HORIZONTAL_ALIGNMENT_LEFT, -1, 25, Color("f2d092"))
+		draw_string(JP_FONT, Vector2(104, 418), "次のレベルへ進みます", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color.WHITE)
 
 func _draw_boss_select() -> void:
 	draw_rect(Rect2(18, 18, 396, 90), Color(0.02, 0.04, 0.10, 0.86), true)
