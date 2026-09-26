@@ -35,25 +35,20 @@ const PUZZLE_COLORS := [
 ]
 const PUZZLE_TAP_WINDOW_MSEC := 350
 # Every color is one edge-connected region. Each template has exactly one answer
-# after its initially revealed birds are taken into account.
+# with no initially revealed birds.
 const PUZZLE_STAGES := [
 	[
-		{"rows": ["0000111", "0221111", "2222113", "2252113", "5254663", "5554633", "5556666"], "birds": [0, 5, 2, 6, 3, 1, 4], "fixed": 2},
-		{"rows": ["1100000", "1112000", "1112200", "1442233", "4442233", "4444225", "6444255"], "birds": [4, 1, 3, 5, 2, 6, 0], "fixed": 1},
+		{"rows": ["1100000", "1112000", "1112200", "1442233", "4442233", "4444225", "6444255"], "birds": [4, 1, 3, 5, 2, 6, 0], "fixed": 0},
 		{"rows": ["2444100", "2444111", "2244113", "2244333", "5444444", "5444444", "5546444"], "birds": [6, 4, 1, 5, 2, 0, 3], "fixed": 0},
 	],
 	[
-		{"rows": ["10000000", "11102200", "13222000", "53332224", "55533444", "55334444", "55666674", "56667774"], "birds": [6, 2, 4, 1, 7, 0, 3, 5], "fixed": 2},
-		{"rows": ["00002111", "00002211", "33322441", "55333444", "55534466", "55576666", "57577776", "57777766"], "birds": [3, 6, 4, 2, 5, 0, 7, 1], "fixed": 1},
-		{"rows": ["10000000", "11000000", "11032222", "11133322", "63333544", "66665544", "66665444", "66775554"], "birds": [2, 0, 6, 4, 7, 5, 1, 3], "fixed": 1},
+		{"rows": ["00011114", "00011144", "22111144", "23333344", "23333444", "22234455", "22226655", "66666777"], "birds": [1, 3, 0, 2, 5, 7, 4, 6], "fixed": 0},
 	],
 	[
-		{"rows": ["200001111", "200001111", "222001111", "224333116", "244353666", "444355566", "743355666", "773358886", "777558888"], "birds": [3, 5, 1, 4, 2, 6, 8, 0, 7], "fixed": 3},
-		{"rows": ["222001111", "220001111", "222301111", "333334488", "355444488", "557466488", "777466668", "777466888", "777446888"], "birds": [4, 6, 0, 3, 5, 1, 7, 2, 8], "fixed": 3},
+		{"rows": ["000111148", "000111448", "221111448", "233333448", "233334458", "222344558", "222266558", "666667778", "888888888"], "birds": [1, 3, 0, 2, 5, 7, 4, 6, 8], "fixed": 0},
 	],
 	[
-		{"rows": ["0221111433", "0221111433", "0225111443", "0225554443", "0222566446", "0555556666", "0099588766", "0999887767", "9999888777", "9999988777"], "birds": [0, 5, 1, 9, 7, 3, 8, 6, 4, 2], "fixed": 4},
-		{"rows": ["1111130000", "1141333000", "1141333222", "4443333222", "4443335556", "4447355556", "7747385666", "7777788966", "7778888969", "7888889999"], "birds": [7, 0, 9, 3, 1, 5, 8, 2, 4, 6], "fixed": 4},
+		{"rows": ["8888888889", "8777666669", "8556622229", "8554432229", "8444333329", "8443333329", "8441111229", "8441110009", "8411110009", "9999999999"], "birds": [0, 2, 4, 1, 3, 6, 8, 5, 7, 9], "fixed": 0},
 	],
 ]
 
@@ -851,6 +846,10 @@ func _puzzle_count_found() -> int:
 			count += 1
 	return count
 
+func _puzzle_haptic() -> void:
+	if OS.has_feature("web"):
+		JavaScriptBridge.eval("window.shieldTapAudio&&window.shieldTapAudio.haptic()", true)
+
 func _puzzle_set_note(row: int, column: int, add_note: bool) -> void:
 	if bool(puzzle_birds[row][column]) or bool(puzzle_wrong[row][column]):
 		return
@@ -858,6 +857,7 @@ func _puzzle_set_note(row: int, column: int, add_note: bool) -> void:
 		return
 	puzzle_notes[row][column] = add_note
 	message = "白い×をメモした" if add_note else "白い×を消した"
+	_puzzle_haptic()
 
 func _puzzle_drag_to(pos: Vector2) -> void:
 	if not puzzle_drag_active or mode != Mode.PUZZLE or puzzle_complete:
@@ -880,6 +880,7 @@ func _puzzle_drag_to(pos: Vector2) -> void:
 func _puzzle_open(row: int, column: int) -> void:
 	if puzzle_complete or bool(puzzle_birds[row][column]) or bool(puzzle_wrong[row][column]):
 		return
+	_puzzle_haptic()
 	puzzle_notes[row][column] = false
 	if column == int(puzzle_answer[row]):
 		puzzle_birds[row][column] = true

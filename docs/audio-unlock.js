@@ -73,6 +73,18 @@
 		oscillator.start(now);
 		oscillator.stop(now + duration + 0.02);
 	};
+	let lastHapticAt = 0;
+	const haptic = () => {
+		if (typeof navigator.vibrate !== 'function') return false;
+		const now = performance.now();
+		if (now - lastHapticAt < 35) return false;
+		lastHapticAt = now;
+		try {
+			return navigator.vibrate(12);
+		} catch (_) {
+			return false;
+		}
+	};
 	const playGuard = () => {
 		const context = getGameContext();
 		if (context && guardBuffer && context.state === 'running') {
@@ -89,7 +101,7 @@
 		sound.volume = 0.72;
 		sound.play().catch(() => play(210, 0.16, 0.13, -0.12));
 	};
-	window.shieldTapAudio = { play, playGuard };
+	window.shieldTapAudio = { play, playGuard, haptic };
 	loadGuardSound();
 	const unlock = () => {
 		for (const context of contexts) {
