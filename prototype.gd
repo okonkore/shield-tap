@@ -846,8 +846,9 @@ func _puzzle_count_found() -> int:
 			count += 1
 	return count
 
-func _puzzle_haptic() -> void:
+func _puzzle_feedback(action: String) -> void:
 	if OS.has_feature("web"):
+		JavaScriptBridge.eval("window.shieldTapAudio&&window.shieldTapAudio.playPuzzleAction(\"%s\")" % action, true)
 		JavaScriptBridge.eval("window.shieldTapAudio&&window.shieldTapAudio.haptic()", true)
 
 func _puzzle_set_note(row: int, column: int, add_note: bool) -> void:
@@ -857,7 +858,7 @@ func _puzzle_set_note(row: int, column: int, add_note: bool) -> void:
 		return
 	puzzle_notes[row][column] = add_note
 	message = "白い×をメモした" if add_note else "白い×を消した"
-	_puzzle_haptic()
+	_puzzle_feedback("add" if add_note else "remove")
 
 func _puzzle_drag_to(pos: Vector2) -> void:
 	if not puzzle_drag_active or mode != Mode.PUZZLE or puzzle_complete:
@@ -880,7 +881,7 @@ func _puzzle_drag_to(pos: Vector2) -> void:
 func _puzzle_open(row: int, column: int) -> void:
 	if puzzle_complete or bool(puzzle_birds[row][column]) or bool(puzzle_wrong[row][column]):
 		return
-	_puzzle_haptic()
+	_puzzle_feedback("open")
 	puzzle_notes[row][column] = false
 	if column == int(puzzle_answer[row]):
 		puzzle_birds[row][column] = true

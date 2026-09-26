@@ -73,6 +73,26 @@
 		oscillator.start(now);
 		oscillator.stop(now + duration + 0.02);
 	};
+	const playPuzzleAction = (action) => {
+		const context = getGameContext();
+		if (!context) return;
+		if (context.state !== 'running') context.resume().catch(() => {});
+		const now = context.currentTime;
+		const tones = action === 'open' ? [520, 720] : action === 'add' ? [430] : [330];
+		tones.forEach((frequency, index) => {
+			const start = now + index * 0.035;
+			const oscillator = context.createOscillator();
+			const gain = context.createGain();
+			oscillator.type = 'sine';
+			oscillator.frequency.setValueAtTime(frequency, start);
+			gain.gain.setValueAtTime(0.0001, start);
+			gain.gain.exponentialRampToValueAtTime(0.045, start + 0.006);
+			gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.055);
+			oscillator.connect(gain).connect(context.destination);
+			oscillator.start(start);
+			oscillator.stop(start + 0.06);
+		});
+	};
 	let lastHapticAt = 0;
 	const haptic = () => {
 		if (typeof navigator.vibrate !== 'function') return false;
@@ -101,7 +121,7 @@
 		sound.volume = 0.72;
 		sound.play().catch(() => play(210, 0.16, 0.13, -0.12));
 	};
-	window.shieldTapAudio = { play, playGuard, haptic };
+	window.shieldTapAudio = { play, playGuard, haptic, playPuzzleAction };
 	loadGuardSound();
 	const unlock = () => {
 		for (const context of contexts) {
