@@ -1260,7 +1260,7 @@ func _draw_puzzle() -> void:
 			var cell_rect := Rect2(PUZZLE_ORIGIN + Vector2(column * cell_size, row * cell_size), Vector2(cell_size, cell_size))
 			var center := cell_rect.get_center()
 			var color_id := int(puzzle_solution[row][column])
-			draw_rect(cell_rect.grow(-2.0 * symbol_scale), PUZZLE_COLORS[color_id], true)
+			draw_rect(cell_rect, PUZZLE_COLORS[color_id], true)
 			if bool(puzzle_wrong[row][column]):
 				draw_line(center + Vector2(-11, -11) * symbol_scale, center + Vector2(11, 11) * symbol_scale, Color("eb473e"), 5.0 * symbol_scale)
 				draw_line(center + Vector2(11, -11) * symbol_scale, center + Vector2(-11, 11) * symbol_scale, Color("eb473e"), 5.0 * symbol_scale)
