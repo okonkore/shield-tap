@@ -818,10 +818,10 @@ func _start_puzzle() -> void:
 	var size_group := mini(PUZZLE_STAGES.size() - 1, floori(float(puzzle_level) / float(PUZZLE_LEVELS_PER_SIZE)))
 	var level_in_group := puzzle_level - size_group * PUZZLE_LEVELS_PER_SIZE
 	var stage_pool: Array = PUZZLE_STAGES[size_group]
-	var stage_index := mini(level_in_group, stage_pool.size() - 1)
+	var stage_index := level_in_group % stage_pool.size()
 	var stage: Dictionary = stage_pool[stage_index]
 	puzzle_size = int((stage["rows"] as Array).size())
-	var variant := (level_in_group - stage_index) % 8
+	var variant := floori(float(level_in_group) / float(stage_pool.size())) % 8
 	for row in range(puzzle_size):
 		var colors_row: Array = []
 		var birds_row: Array = []
